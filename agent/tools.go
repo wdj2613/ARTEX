@@ -1025,23 +1025,23 @@ type intentItem struct {
 	Priority  int               `json:"priority"`
 }
 
-// addOneIntent 创建一条意图节点并连上游血缘，返回 id。
+// addOneIntent 创建一条意图节点并连上游血缘，返回 id 与去重提醒（未命中重复时为空）。
 // 约束：意图只能锚在已确认知识上——每个 parent_id 必须是已存在的 fact/finding
 // 节点（不能挂在别的意图/目标/提示上）。顶层全新方向留空 parent_ids，兜底连 origin fact。
 // 这样"每个意图都连到 fact 节点、且是发现驱动而非凭空规划"从创建路径上被强制。
-func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
+func (t *ToolSet) addOneIntent(it intentItem) (int64, string, error) {
 	if strings.TrimSpace(it.Summary) == "" {
-		return 0, fmt.Errorf("summary 不能为空")
+		return 0, "", fmt.Errorf("summary 不能为空")
 	}
 	// 先校验锚点（建节点前，避免坏锚点留下孤儿意图）。
 	parents := pidList(it.ParentIDs)
 	for _, pidv := range parents {
 		n, err := t.ts.GetNodeWithSources(pidv)
 		if err != nil || n == nil {
-			return 0, fmt.Errorf("parent_id %d 不存在于本任务或直接关联任务：parent_ids 必须是已存在的【事实(fact)/发现(finding)】节点 id；顶层全新方向请留空 parent_ids", pidv)
+			return 0, "", fmt.Errorf("parent_id %d 不存在于本任务或直接关联任务：parent_ids 必须是已存在的【事实(fact)/发现(finding)】节点 id；顶层全新方向请留空 parent_ids", pidv)
 		}
 		if n.Kind != db.KindFact && n.Kind != db.KindFinding {
-			return 0, fmt.Errorf("parent_id %d 是 %q 节点，不能作为意图锚点：意图只能锚在已确认的【事实(fact)/发现(finding)】上，不能挂在意图/目标/提示上；顶层全新方向请留空 parent_ids", pidv, n.Kind)
+			return 0, "", fmt.Errorf("parent_id %d 是 %q 节点，不能作为意图锚点：意图只能锚在已确认的【事实(fact)/发现(finding)】上，不能挂在意图/目标/提示上；顶层全新方向请留空 parent_ids", pidv, n.Kind)
 		}
 	}
 	priority := it.Priority
@@ -1053,7 +1053,7 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 	if t.as != nil && len(anchors) > 0 {
 		hits, err := t.as.CheckAssetsIntercept(t.taskID, anchors)
 		if err != nil {
-			return 0, fmt.Errorf("资产拦截校验失败：%w", err)
+			return 0, "", fmt.Errorf("资产拦截校验失败：%w", err)
 		}
 		if len(hits) > 0 {
 			var b strings.Builder
@@ -1061,16 +1061,27 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 			for _, h := range hits {
 				fmt.Fprintf(&b, "\n - %s", h.Describe())
 			}
-			return 0, fmt.Errorf("%s", b.String())
+			return 0, "", fmt.Errorf("%s", b.String())
 		}
 	}
 	payload := map[string]any{"summary": it.Summary}
 	if len(anchors) > 0 {
 		payload["asset_ids"] = anchors
 	}
+	// 近似去重闸：与本任务已有意图比对（显式 #id 引用 + 文本相似度），命中后按
+	// IntentDedupMode 决定拦下还是只提醒。这里拿不到 store 时（理论不会发生）放行，
+	// 不能让查重失败挡住规划本身。
+	digests, derr := t.ts.IntentDigests(200)
+	if derr != nil {
+		digests = nil
+	}
+	blocked, dupNote := duplicateIntents(it.Summary, digests)
+	if blocked != "" {
+		return 0, "", fmt.Errorf("%s", blocked)
+	}
 	id, err := t.ts.AddIntent(payload, priority, anchors, "planner")
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	// upstream lineage: link each (validated) fact/finding parent → this intent, so
 	// "multiple facts combine into one new intent" is expressible.
@@ -1085,12 +1096,13 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 			_ = t.ts.Link(origin, db.RelDerivedFrom, id)
 		}
 	}
-	return id, nil
+	return id, dupNote, nil
 }
 
 func (t *ToolSet) addIntent() actool.CoreTool {
 	return t.writeExpTool("add_intent", "生成【探索方向】写入 frontier，并连入探索链路。意图是开放的探索方向，不是固定类型——用 summary 一句话自由描述要探索/验证/利用什么。\n"+
-		"★优先批量：一轮筛出的多个新方向放进 intents 数组一次提交（比逐条调用省往返）。返回 ids 数组，与 intents 等长同序（失败项 id=0，详情见 errors）。单条则省略 intents 直接给顶层 summary。",
+		"★优先批量：一轮筛出的多个新方向放进 intents 数组一次提交（比逐条调用省往返）。返回 ids 数组，与 intents 等长同序（失败项 id=0，详情见 errors）。单条则省略 intents 直接给顶层 summary。\n"+
+		"★尽量避免重复方向：返回里若出现 warnings（按 intents 下标），说明该条与本任务已有意图高度重复（summary 里写 #id，或与某条意图文本近似）——按提示处理：仍在场的用 steer_work 纠偏、已结束的要么把\"本轮新增什么\"写清楚要么就别开。",
 		obj(map[string]any{
 			"intents":    map[string]any{"type": "array", "description": "【优先用这个】要新增的探索方向数组，按顺序处理。每个元素字段同下方顶层字段（summary/asset_ids/parent_ids/priority）。返回 ids 与本数组等长、同序。", "items": map[string]any{"type": "object"}},
 			"summary":    str("[单条] 一句话描述这个探索方向：做什么+为什么。已写清方向即可，不依赖资产 id。"),
@@ -1112,14 +1124,18 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 
 			ids := make([]int64, len(items))
 			errs := map[string]string{}
+			notes := map[string]string{}
 			createdAny := false
 			for i, it := range items {
-				id, err := t.addOneIntent(it)
+				id, note, err := t.addOneIntent(it)
 				if err != nil {
 					errs[strconv.Itoa(i)] = err.Error()
 					continue
 				}
 				ids[i] = id
+				if note != "" {
+					notes[strconv.Itoa(i)] = note
+				}
 				createdAny = true
 			}
 
@@ -1131,15 +1147,23 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 				t.resumeTask()
 			}
 
-			if !batch { // 单条：保持原返回
+			if !batch { // 单条：保持原返回，去重提醒附在正文后
 				if e, bad := errs["0"]; bad {
 					return actool.Errorf(e), nil
 				}
-				return actool.Text(fmt.Sprintf("intent created: %d", ids[0])), nil
+				text := fmt.Sprintf("intent created: %d", ids[0])
+				if note, dup := notes["0"]; dup {
+					text += "\n" + note
+				}
+				return actool.Text(text), nil
 			}
 			out := map[string]any{"ids": ids}
 			if len(errs) > 0 {
 				out["errors"] = errs
+			}
+			// warnings 按 intents 下标给出：命中去重闸的那几条，见 agent/intent_dedup.go
+			if len(notes) > 0 {
+				out["warnings"] = notes
 			}
 			return jsonResult(out)
 		})
