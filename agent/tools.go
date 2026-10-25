@@ -43,6 +43,13 @@ func compactIntents(ns []*db.Node, parentsOf, yieldsOf map[int64][]int64) []map[
 		if ys := yieldsOf[n.ID]; len(ys) > 0 {
 			m["yields"] = ys // 下游：本意图产生了哪些事实/发现
 		}
+		// progress：worker 自己汇报（或引擎终局自动补）的"做到哪/还剩什么"。撞预算变成
+		// exhausted 的意图靠它区分"跑完了"与"被打断"，避免规划者从头再开一条同义意图。
+		if pr, ok := p["progress"].(map[string]any); ok {
+			if brief := progressBrief(pr); brief != nil {
+				m["progress"] = brief
+			}
+		}
 		out = append(out, m)
 	}
 	return out

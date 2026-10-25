@@ -279,6 +279,13 @@ func workerWaitSpec() string {
 		"- **禁止用 `sleep` 等待**：单次 `sleep` 不得超过 30 秒，更长的阻塞等待会被平台直接拦掉；需要继续等就再轮询一次，把\"发起 → 抽查 → 写回结论\"做完就收尾。\n"
 }
 
+// workerProgressSpec is 段 [E]: 进度留痕的约定。意图是一次性时间预算，撞上限就被迫收尾，
+// 收尾时平台只能把"最后一次汇报"留给规划者——不汇报就等于这次白跑（线上 task#4 有 212 条
+// 意图 exhausted，其中多数续跑都是从零重来）。代码-owned，改 DB 提示词也丢不掉。
+func workerProgressSpec() string {
+	return "\n\n**进度留痕**（收尾后规划者只认这个）：每推完一个分片（一批主机/一批接口/一个候选面）就调一次 `report_progress`，写清 `completed`（做完什么）、`remaining`（还剩哪些候选）、`next_step`。意图撞到步数/墙钟上限会被强制收尾，平台把你**最后一次汇报**留给规划者；一次都没汇报，下一条续跑意图只能从头再来，等于这次预算白烧。"
+}
+
 // ensureRunDir builds and creates an agent's working directory under base:
 // <base>/tasks/<taskID> for planner/main; <base>/tasks/<taskID>/i<intentID> for a
 // worker (intentID<=0 → task dir only). The "tasks/" segment groups per-task dirs
@@ -301,7 +308,7 @@ func workerSystem(proxyAddr, caCert, dataDir, runDir string) string {
 	// caCert is present only when the recording MITM is on, which is exactly when
 	// the traffic_* tools are registered — so it gates the traffic-tool note.
 	// Optional finding guidance is added for every role after tool resolution.
-	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + workerWaitSpec()
+	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + workerWaitSpec() + workerProgressSpec()
 }
 
 // renderIntentTask formats the claimed intent for the worker's launch USER message:
