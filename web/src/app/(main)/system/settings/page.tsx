@@ -17,9 +17,33 @@ import type { Settings } from "@/lib/types";
 
 import { UpdateCard } from "./_components/update-card";
 
+// 意图去重闸的力度选项：默认 warn（照常创建 + 把重复提醒回给规划者）。
+const INTENT_DEDUP_OPTIONS = [
+  {
+    value: "warn" as const,
+    label: "仅提醒（默认）",
+    hint: "照常创建意图，但把「与哪条已有意图重复」写回给规划者，让它自己合并或换方向。",
+    saved: "已切换为仅提醒",
+  },
+  {
+    value: "block" as const,
+    label: "拦截在跑方向",
+    hint: "同一方向已有 worker 在跑时，直接拒绝创建新意图（已结束方向的续跑仍只提醒）。",
+    saved: "已切换为拦截在跑方向",
+  },
+  {
+    value: "off" as const,
+    label: "关闭去重",
+    hint: "不做任何查重。仅在怀疑闸误伤正常探索时使用。",
+    saved: "已关闭意图去重",
+  },
+];
+
 export default function SystemSettingsPage() {
   const [trafficCapture, setTrafficCapture] = React.useState(false);
   const [agentTrafficBinding, setAgentTrafficBinding] = React.useState(false);
+  // add_intent 近似去重闸的力度（off/warn/block），默认 warn。
+  const [intentDedup, setIntentDedup] = React.useState<"off" | "warn" | "block">("warn");
   const [webSearch, setWebSearch] = React.useState(false);
   const [backend, setBackend] = React.useState("ddgs");
   const [braveKeySet, setBraveKeySet] = React.useState(false);
@@ -49,6 +73,7 @@ export default function SystemSettingsPage() {
   const apply = React.useCallback((s: Settings) => {
     setTrafficCapture(!!s.traffic_capture);
     setAgentTrafficBinding(!!s.agent_traffic_binding);
+    setIntentDedup((s.agent_intent_dedup as "off" | "warn" | "block") || "warn");
     setWebSearch(!!s.web_search_enabled);
     setBackend(s.web_search_backend || "ddgs");
     setBraveKeySet(!!s.brave_key_set);
@@ -136,6 +161,23 @@ export default function SystemSettingsPage() {
       })
       .catch((e) => {
         setAgentTrafficBinding(!v);
+        toast.error(`保存失败：${(e as Error).message}`);
+      })
+      .finally(() => setSaving(false));
+  };
+
+  const saveIntentDedup = (v: "off" | "warn" | "block") => {
+    const prev = intentDedup;
+    setIntentDedup(v); // optimistic
+    setSaving(true);
+    api
+      .setSettings({ agent_intent_dedup: v })
+      .then((s) => {
+        apply(s);
+        toast.success(INTENT_DEDUP_OPTIONS.find((o) => o.value === v)?.saved ?? "已保存");
+      })
+      .catch((e) => {
+        setIntentDedup(prev);
         toast.error(`保存失败：${(e as Error).message}`);
       })
       .finally(() => setSaving(false));
@@ -320,6 +362,48 @@ export default function SystemSettingsPage() {
               disabled={!loaded || saving}
               onCheckedChange={toggleAgentTrafficBinding}
             />
+          </CardContent>
+        </Card>
+
+        <Card className="mb-4 break-inside-avoid md:mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ShieldAlertIcon className="size-4" />
+              意图去重闸
+            </CardTitle>
+            <CardDescription id="intent-dedup-description">
+              规划者创建新探索方向（<code>add_intent</code>）前，平台会与已有意图比对：正文里写了已有意图 id（如{" "}
+              <code>#1510</code>），或描述与某条意图高度相似，即判定为重复。
+              <br />
+              默认<b>仅提醒</b>：重复方向照常创建，但会把「与哪条重复」写回给规划者。
+              <b>拦截在跑方向</b>会拒绝创建「同一方向已有 worker 在跑」的意图——已结束方向的续跑仍只提醒，不会被拦。
+              改动即时生效，对下一轮规划生效。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <Label htmlFor="intent-dedup-mode" className="text-sm font-normal text-muted-foreground">
+              {INTENT_DEDUP_OPTIONS.find((o) => o.value === intentDedup)?.hint ?? ""}
+            </Label>
+            <Select
+              value={intentDedup}
+              onValueChange={(v) => saveIntentDedup(v as "off" | "warn" | "block")}
+              disabled={!loaded || saving}
+            >
+              <SelectTrigger
+                id="intent-dedup-mode"
+                aria-describedby="intent-dedup-description"
+                className="w-48 shrink-0"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {INTENT_DEDUP_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </CardContent>
         </Card>
 
