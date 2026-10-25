@@ -261,6 +261,24 @@ func intentDedupModeOf(get func() (value string, ok bool, err error)) string {
 	return "warn"
 }
 
+// knowledgeQueryBudgetOf 归一化跨任务检索的关键词额度：缺省、读库失败、非正数都回默认 6，
+// 上限夹到 50（再多就等于没有约束，上下文成本会失控）。get 传入是为了免 DB 单测。
+func knowledgeQueryBudgetOf(get func() (value string, ok bool, err error)) int {
+	const def = 6
+	v, ok, err := get()
+	if err != nil || !ok {
+		return def
+	}
+	n, convErr := strconv.Atoi(strings.TrimSpace(v))
+	if convErr != nil || n <= 0 {
+		return def
+	}
+	if n > 50 {
+		return 50
+	}
+	return n
+}
+
 // Settings keys the UI toggles at runtime.
 const (
 	settingTrafficCapture      = "traffic_capture"
@@ -269,11 +287,17 @@ const (
 	// off / warn (default: create + warn) / block (refuse while a duplicate is
 	// still live). See agent/intent_dedup.go.
 	settingAgentIntentDedup = "agent_intent_dedup"
-	settingWebSearchOn         = "web_search_enabled"
-	settingWebSearchBackend    = "web_search_backend"
-	settingBraveKey            = "brave_search_api_key"
-	settingTavilyKey           = "tavily_search_api_key"
-	settingWebSearchProxy      = "web_search_proxy"
+	// settingAgentKnowledgeSearch 控制跨任务知识检索（search_knowledge）是否开放。
+	// 默认开：只读、不改变既有工具行为，价值在复用别的任务验证过的结论与手法。
+	settingAgentKnowledgeSearch = "agent_knowledge_search"
+	// settingAgentKnowledgeQueryBudget 是每个任务允许的**不同**关键词条数（同词重复搜索
+	// 不占额度）。默认 6，见 agent/knowledge.go 的去重与预算逻辑。
+	settingAgentKnowledgeQueryBudget = "agent_knowledge_query_budget"
+	settingWebSearchOn               = "web_search_enabled"
+	settingWebSearchBackend          = "web_search_backend"
+	settingBraveKey                  = "brave_search_api_key"
+	settingTavilyKey                 = "tavily_search_api_key"
+	settingWebSearchProxy            = "web_search_proxy"
 	// settingGlobalProxy is the global egress proxy for all target traffic
 	// (http/https/socks5). Empty = direct. Distinct from web_search_proxy (which
 	// only routes the search backend) and the per-profile LLM proxy.

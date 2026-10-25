@@ -523,6 +523,12 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 	// summaries in a separate field so their intents never enter this task's
 	// frontier or get mistaken for locally claimable work.
 	out["related_tasks"] = t.relatedTaskOverviews()
+	// 跨任务既有漏洞（被动展示，零查询成本）：只挑**资产与本任务有交集**的其它任务的
+	// 漏洞，按严重度排序。同一目标上别人已经确认过的东西不该再让规划者去发现一遍；
+	// 没有资产交集就不出现（全新目标，历史结论不适用，避免误导）。
+	if hits, err := t.ts.CrossTaskFindings(crossTaskFindingsLimit); err == nil && len(hits) > 0 {
+		out["cross_task_findings"] = crossTaskFindingsBrief(hits)
+	}
 	// coverage：粗略的资产测试覆盖度参考——范围(task_scope)内的资产里，被 fact 碰过的
 	// 占比 + by_type(按类型的 总数/已测)。要看未测的具体资产由 agent 按需调 list_untested_assets 自行判断。仅任务上下文有。
 	// 资产覆盖度功能关闭时(coverageDisabled)：只保留 host_count(目标主机数的感知信息)，

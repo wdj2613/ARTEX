@@ -1384,3 +1384,22 @@ CREATE INDEX IF NOT EXISTS idx_notification_deliveries_batch
     ON notification_deliveries(batch_id) WHERE batch_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_notification_deliveries_channel
     ON notification_deliveries(channel_id, id DESC);
+
+-- =====================================================================
+-- 跨任务知识检索的查询账本
+-- 规划者可以用 search_knowledge 在【所有任务】里按关键词找已经确认过的漏洞与探索
+-- 事实，复用别的任务得到的结论与手法。命中的是别人的成果，全文不直接返回（只给
+-- 指针），但反复搜同一个词仍会把上下文推高——线上 list_facts 单任务曾被调用 600+
+-- 次，所以这里记下每个任务搜过哪些词、当时的命中快照：
+--   * 同词再搜 → 直接告诉调用方"结果没变"，不再重复展开；
+--   * 不同词的条数受任务级预算约束（默认 6），超了就不再放行。
+-- q_norm 是归一化后的查询词（小写 + 压缩空白），大小写/多余空格不算新查询。
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS knowledge_queries (
+    exploration_id BIGINT NOT NULL REFERENCES explorations(id) ON DELETE CASCADE,
+    q_norm         TEXT   NOT NULL,
+    hit_count      INTEGER NOT NULL DEFAULT 0,
+    hit_ids        JSONB  NOT NULL DEFAULT '[]'::jsonb,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (exploration_id, q_norm)
+);

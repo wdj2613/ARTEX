@@ -913,6 +913,9 @@ export interface Settings {
   agent_traffic_binding: boolean; // Agent 自动绑定流量证据，默认关闭；不影响人工绑定
   // add_intent 近似去重闸：off=不查 / warn=照常创建并提醒（默认） / block=重复方向仍在跑时拒绝创建
   agent_intent_dedup: "off" | "warn" | "block";
+  // 跨任务知识检索（search_knowledge）：是否开放 + 每任务不同关键词额度（1~50）
+  agent_knowledge_search: boolean;
+  agent_knowledge_query_budget: number;
   llm_record: boolean; // LLM 录制开关（默认关）；关闭时不记录任何 LLM 调用
   // Web search. brave_key_set / tavily_key_set reflect whether a key is stored
   // (the values are never returned). On PUT, send the corresponding field to set/clear.

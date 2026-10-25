@@ -3327,6 +3327,8 @@ export const settings: Settings = {
   traffic_capture: true,
   agent_traffic_binding: false,
   agent_intent_dedup: "warn",
+  agent_knowledge_search: true,
+  agent_knowledge_query_budget: 6,
   llm_record: false,
   web_search_enabled: true,
   web_search_backend: "ddgs",
