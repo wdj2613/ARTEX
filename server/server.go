@@ -3290,10 +3290,15 @@ func (s *Server) settingsPayload() map[string]any {
 		concLimit = defaultConcurrencyLimit // 关闭时也回显一个合理默认值给 UI
 	}
 	return map[string]any{
-		"traffic_capture":          s.m.TrafficEnabled(),
-		"agent_traffic_binding":    s.m.pg.GetBool(settingAgentTrafficBinding, false),
+		"traffic_capture":       s.m.TrafficEnabled(),
+		"agent_traffic_binding": s.m.pg.GetBool(settingAgentTrafficBinding, false),
 		// add_intent 近似去重闸：off / warn（默认）/ block，见 agent/intent_dedup.go
 		"agent_intent_dedup": intentDedupModeOf(func() (string, bool, error) { return s.m.pg.GetSetting(settingAgentIntentDedup) }),
+		// 跨任务知识检索：是否开放 + 每任务关键词额度（默认 6）
+		"agent_knowledge_search": s.m.pg.GetBool(settingAgentKnowledgeSearch, true),
+		"agent_knowledge_query_budget": knowledgeQueryBudgetOf(func() (string, bool, error) {
+			return s.m.pg.GetSetting(settingAgentKnowledgeQueryBudget)
+		}),
 		"llm_record":               s.m.LLMRecordEnabled(),
 		"web_search_enabled":       on,
 		"web_search_backend":       backend,
@@ -3384,6 +3389,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		LLMPoolBindFallback *bool `json:"llm_pool_bind_fallback"`
 		// 意图近似去重闸模式(off/warn/block);每次 add_intent 读一次,即时生效。
 		AgentIntentDedup *string `json:"agent_intent_dedup"`
+		// 跨任务知识检索开关 + 每任务关键词额度（1..50，默认 6）。即时生效。
+		AgentKnowledgeSearch      *bool `json:"agent_knowledge_search"`
+		AgentKnowledgeQueryBudget *int  `json:"agent_knowledge_query_budget"`
 		// 操作约束注入范围开关(默认都开);即时生效(planner/worker 每轮读),无需重建 agent。
 		ConstraintsInjectPlanner *bool `json:"constraints_inject_planner"`
 		ConstraintsInjectWorker  *bool `json:"constraints_inject_worker"`
@@ -3408,6 +3416,23 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.m.pg.SetSetting(settingAgentIntentDedup, mode); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.AgentKnowledgeSearch != nil {
+		if err := s.m.pg.SetBool(settingAgentKnowledgeSearch, *req.AgentKnowledgeSearch); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.AgentKnowledgeQueryBudget != nil {
+		budget := *req.AgentKnowledgeQueryBudget
+		if budget <= 0 || budget > 50 {
+			writeErr(w, 400, "agent_knowledge_query_budget 只能是 1~50")
+			return
+		}
+		if err := s.m.pg.SetSetting(settingAgentKnowledgeQueryBudget, strconv.Itoa(budget)); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}
