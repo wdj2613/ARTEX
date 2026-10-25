@@ -1109,6 +1109,7 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		if err := transitionIntentState(t.Store, intent.ID, "running", "exhausted"); err != nil {
 			log.Printf("[worker %s] task %s 意图 #%d 超时收尾状态落库失败: %v", name, t.ID, intent.ID, err)
 		}
+		recordIntentProgress(t.Store, intent.ID, "exhausted", harness.ReasonTimeout, wrote)
 		log.Printf("[worker %s] task %s 意图 #%d 因任务超时收尾结束(exhausted)，写回 %s", name, t.ID, intent.ID, wrote)
 		e.touch(t.ID)
 		return true
@@ -1119,6 +1120,7 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		if err := transitionIntentState(t.Store, intent.ID, "running", "stopped"); err != nil {
 			log.Printf("[worker %s] task %s 意图 #%d 终态停止落库失败: %v", name, t.ID, intent.ID, err)
 		}
+		recordIntentProgress(t.Store, intent.ID, "stopped", reason, wrote)
 		log.Printf("[worker %s] task %s 意图 #%d 因任务已完成而取消(stopped)", name, t.ID, intent.ID)
 		e.touch(t.ID)
 		return true
@@ -1128,6 +1130,7 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		if err := transitionIntentState(t.Store, intent.ID, "running", "stopped"); err != nil {
 			log.Printf("[worker %s] task %s 意图 #%d planner 停止落库失败: %v", name, t.ID, intent.ID, err)
 		}
+		recordIntentProgress(t.Store, intent.ID, "stopped", reason, wrote)
 		log.Printf("[worker %s] task %s 意图 #%d 被终止(stopped)", name, t.ID, intent.ID)
 		e.touch(t.ID)
 		t.Notify()
@@ -1155,6 +1158,8 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		if stateErr := transitionIntentState(t.Store, intent.ID, "running", state); stateErr != nil {
 			log.Printf("[worker %s] task %s 意图 #%d 终态 %s 落库失败: %v", name, t.ID, intent.ID, state, stateErr)
 		}
+		// 撞步数上限/超时变 exhausted 时，进度是规划者决定"续跑还是换方向"的唯一依据。
+		recordIntentProgress(t.Store, intent.ID, state, reason, wrote)
 	}
 	log.Printf("[worker %s] task %s 意图 #%d 结束: %s (写回 %s)", name, t.ID, intent.ID, state, wrote)
 	e.touch(t.ID)
