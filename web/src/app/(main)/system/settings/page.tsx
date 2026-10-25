@@ -44,6 +44,9 @@ export default function SystemSettingsPage() {
   const [agentTrafficBinding, setAgentTrafficBinding] = React.useState(false);
   // add_intent 近似去重闸的力度（off/warn/block），默认 warn。
   const [intentDedup, setIntentDedup] = React.useState<"off" | "warn" | "block">("warn");
+  const [knowledgeSearch, setKnowledgeSearch] = React.useState(true);
+  const [knowledgeBudget, setKnowledgeBudget] = React.useState(6);
+  const [budgetDraft, setBudgetDraft] = React.useState("6");
   const [webSearch, setWebSearch] = React.useState(false);
   const [backend, setBackend] = React.useState("ddgs");
   const [braveKeySet, setBraveKeySet] = React.useState(false);
@@ -74,6 +77,10 @@ export default function SystemSettingsPage() {
     setTrafficCapture(!!s.traffic_capture);
     setAgentTrafficBinding(!!s.agent_traffic_binding);
     setIntentDedup((s.agent_intent_dedup as "off" | "warn" | "block") || "warn");
+    setKnowledgeSearch(s.agent_knowledge_search !== false);
+    const budget = typeof s.agent_knowledge_query_budget === "number" ? s.agent_knowledge_query_budget : 6;
+    setKnowledgeBudget(budget);
+    setBudgetDraft(String(budget));
     setWebSearch(!!s.web_search_enabled);
     setBackend(s.web_search_backend || "ddgs");
     setBraveKeySet(!!s.brave_key_set);
@@ -178,6 +185,49 @@ export default function SystemSettingsPage() {
       })
       .catch((e) => {
         setIntentDedup(prev);
+        toast.error(`保存失败：${(e as Error).message}`);
+      })
+      .finally(() => setSaving(false));
+  };
+
+  const saveKnowledgeSearch = (v: boolean) => {
+    const prev = knowledgeSearch;
+    setKnowledgeSearch(v); // optimistic
+    setSaving(true);
+    api
+      .setSettings({ agent_knowledge_search: v })
+      .then((s) => {
+        apply(s);
+        toast.success(v ? "已开启跨任务知识检索" : "已关闭跨任务知识检索");
+      })
+      .catch((e) => {
+        setKnowledgeSearch(prev);
+        toast.error(`保存失败：${(e as Error).message}`);
+      })
+      .finally(() => setSaving(false));
+  };
+
+  // 额度按整数提交（1~50）：越界不提交、直接提示，避免把后端校验当输入框用。
+  const saveKnowledgeBudget = () => {
+    const n = Number.parseInt(budgetDraft, 10);
+    if (!Number.isFinite(n) || n < 1 || n > 50) {
+      toast.error("关键词额度只能是 1~50 的整数");
+      setBudgetDraft(String(knowledgeBudget));
+      return;
+    }
+    if (n === knowledgeBudget) return;
+    const prev = knowledgeBudget;
+    setKnowledgeBudget(n); // optimistic
+    setSaving(true);
+    api
+      .setSettings({ agent_knowledge_query_budget: n })
+      .then((s) => {
+        apply(s);
+        toast.success(`已保存：每任务最多 ${n} 个关键词`);
+      })
+      .catch((e) => {
+        setKnowledgeBudget(prev);
+        setBudgetDraft(String(prev));
         toast.error(`保存失败：${(e as Error).message}`);
       })
       .finally(() => setSaving(false));
@@ -404,6 +454,67 @@ export default function SystemSettingsPage() {
                 ))}
               </SelectContent>
             </Select>
+          </CardContent>
+        </Card>
+
+        <Card className="mb-4 break-inside-avoid md:mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <SearchIcon className="size-4" />
+              跨任务知识检索
+            </CardTitle>
+            <CardDescription id="knowledge-search-description">
+              规划者可以按关键词在<b>所有任务</b>里检索已经确认过的漏洞与探索事实，直接复用别的任务得到的结论和手法
+              （同一厂商的多个部署、同族目标、同一套后台/验证码/越权套路）。
+              <br />
+              为防止反复检索把上下文吃光：<b>同一个关键词只展开一次</b>（重复搜只回数量与前几个引用），
+              <b>不同关键词合计上限</b>见下方额度。结论只在来源任务的目标上验证过——手法可借鉴，结论必须在本目标复验。
+              <br />
+              另外 <code>graph_overview</code> 会自动展示<b>资产有交集</b>的其他任务已确认漏洞，不占检索额度。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="knowledge-search" className="text-sm font-normal text-muted-foreground">
+                {knowledgeSearch ? "已开启 · 规划者可跨任务检索" : "已关闭 · 只有任务内共享"}
+              </Label>
+              <Switch
+                id="knowledge-search"
+                aria-describedby="knowledge-search-description"
+                checked={knowledgeSearch}
+                disabled={!loaded || saving}
+                onCheckedChange={saveKnowledgeSearch}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="knowledge-budget" className="text-sm font-normal text-muted-foreground">
+                每任务关键词额度（1~50，重复搜同一词不占额度）
+              </Label>
+              <div className="flex shrink-0 items-center gap-2">
+                <Input
+                  id="knowledge-budget"
+                  type="number"
+                  min={1}
+                  max={50}
+                  className="w-20"
+                  value={budgetDraft}
+                  disabled={!loaded || saving || !knowledgeSearch}
+                  onChange={(e) => setBudgetDraft(e.target.value)}
+                  onBlur={saveKnowledgeBudget}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") saveKnowledgeBudget();
+                  }}
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!loaded || saving || !knowledgeSearch}
+                  onClick={saveKnowledgeBudget}
+                >
+                  保存
+                </Button>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
