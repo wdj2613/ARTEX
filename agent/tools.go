@@ -1673,8 +1673,17 @@ func (t *ToolSet) addHint() actool.CoreTool {
 }
 
 // killWorkTool lets the planner terminate a single running work (by intent id).
+//
+// 幂等语义：意图是一次性 work，没有运行中的 work 手柄并不等于"终止失败"。
+//   - 已结束（done/blocked/exhausted/stopped）→ 无需终止，直接回报状态，不报错；
+//   - 尚未被领取（open/paused）→ 直接落 stopped，避免它被 worker 领取后再白跑一轮；
+//   - 运行中（running）→ 发终止信号（worker 侧按 killed_by_planner 收尾）。
+//
+// 线上数据里 kill_work 有 78% 的调用落在"意图其实已经结束"上（规划者被意图收尾唤醒
+// 后回头去杀它），此前一律返回错误，既误导模型又让失控意图没人收：改用幂等语义后，
+// 同一个动作在任何状态下都有确定结果。
 func (t *ToolSet) killWorkTool() actool.CoreTool {
-	return t.writeExpTool("kill_work", "终止一条正在运行的意图(work)。用于叫停跑偏/无意义的探索；被终止的意图标记为 stopped，不再自动重领。先用 get_worker_output 看看它在干嘛再决定。",
+	return t.writeExpTool("kill_work", "终止一条意图(work)。用于叫停跑偏/无意义的探索；被终止的意图标记为 stopped，不再自动重领。**幂等**：对已结束的意图调用会直接回报其状态而不报错；对尚未被领取的意图会直接标记 stopped。先用 get_worker_output 看看它在干嘛再决定。",
 		obj(map[string]any{"intent_id": idp("要终止的意图 id（= work 句柄）")}, "intent_id"),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			if t.killWork == nil {
@@ -1692,11 +1701,50 @@ func (t *ToolSet) killWorkTool() actool.CoreTool {
 			if err != nil || node == nil || node.Kind != db.KindIntent {
 				return actool.Errorf("intent_id 必须是本任务的意图（关联任务意图只读）"), nil
 			}
+			switch classifyKillWork(node.State) {
+			case killWorkAlreadyDone:
+				return actool.Text(fmt.Sprintf("意图 %d 已结束（state=%s），无需终止", id, node.State)), nil
+			case killWorkStopOpen:
+				ok, casErr := t.ts.CompareAndSetIntentState(id, node.State, "stopped")
+				if casErr != nil {
+					return actool.Errorf(fmt.Sprintf("意图 %d 标记 stopped 失败: %v", id, casErr)), nil
+				}
+				if ok {
+					return actool.Text(fmt.Sprintf("意图 %d 当前未在执行（state=%s），已直接标记 stopped，不会被任何 worker 领取", id, node.State)), nil
+				}
+				// 状态在读取与 CAS 之间变了（多半是刚被 worker 领取）→ 按运行中处理。
+			}
 			if err := t.killWork(id); err != nil {
+				// 竞态兜底：终止信号到达前 work 刚好自己收尾了 → 仍按幂等成功回报。
+				if cur, getErr := t.ts.GetNode(id); getErr == nil && cur != nil && classifyKillWork(cur.State) == killWorkAlreadyDone {
+					return actool.Text(fmt.Sprintf("意图 %d 已结束（state=%s），无需终止", id, cur.State)), nil
+				}
 				return actool.Errorf(err.Error()), nil
 			}
 			return actool.Text(fmt.Sprintf("已向意图 %d 的 work 发送终止信号", id)), nil
 		})
+}
+
+// killWorkAction 是 kill_work 对一条意图应采取的动作，仅取决于意图当前的节点状态。
+type killWorkAction int
+
+const (
+	killWorkSignal      killWorkAction = iota // 运行中 → 向 work 发终止信号
+	killWorkStopOpen                          // 未领取（open/paused）→ 直接落 stopped
+	killWorkAlreadyDone                       // 已是终态 → 幂等回报，不报错
+)
+
+// classifyKillWork 把意图状态映射成 kill_work 的动作。终态判定复用 db.IntentTerminalState
+// （意图状态机的唯一事实源），避免工具层与存储层对"已结束"的理解发生漂移。
+func classifyKillWork(state string) killWorkAction {
+	switch {
+	case db.IntentTerminalState(state):
+		return killWorkAlreadyDone
+	case state == "open", state == "paused":
+		return killWorkStopOpen
+	default: // running，以及任何未知新状态 → 交给运行中的 work 去终止
+		return killWorkSignal
+	}
 }
 
 // steerWorkTool lets the planner inject a mid-run course-correction into a running
