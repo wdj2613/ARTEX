@@ -580,6 +580,12 @@ func (h steerHooks) PreToolUse(ctx context.Context, name string, input []byte) (
 		return true, "【规划者实时纠偏】" + msg +
 			"\n（这是规划者对本意图的即时指令；本次工具调用未执行，请据此调整下一步。若与你当前打算冲突，以此为准。）", nil
 	}
+	// 阻塞式 sleep 会原地烧光这条意图的一次性墙钟预算（线上曾有单任务 68 小时耗在这里），
+	// 在调用点拦住并给出后台执行 + 轮询的替代做法，比事后靠提示词劝更可靠。
+	if secs, blocked := blockingSleepSeconds(name, input); blocked {
+		log.Printf("[work %s] 拦截阻塞式 sleep %gs（改用后台执行 + 轮询）", h.label, secs)
+		return true, blockingSleepNudge(secs), nil
+	}
 	if h.inner != nil {
 		return h.inner.PreToolUse(ctx, name, input)
 	}
