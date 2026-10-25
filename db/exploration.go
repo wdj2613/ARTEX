@@ -304,6 +304,20 @@ func (s *ExplorationStore) DeleteGoal(id int64) error {
 	return nil
 }
 
+// IntentTerminalState reports whether state is a settled intent state. It is the
+// single source of truth for the terminal set: the store's own transitions
+// (SetIntentState / CompareAndSetIntentState) and callers outside the package
+// (e.g. the planner's kill_work tool) must agree on it, otherwise an intent can
+// look "running" to one side and "finished" to the other.
+func IntentTerminalState(state string) bool {
+	switch state {
+	case "done", "blocked", "exhausted", "stopped":
+		return true
+	default:
+		return false
+	}
+}
+
 // SetIntentState updates an intent node's state.
 // ResetRunningIntents returns any intent left in 'running' back to 'open' so it
 // is re-claimed. Called on startup: a 'running' intent with no live worker (a
@@ -350,7 +364,7 @@ WHERE exploration_id=$1 AND kind='intent' AND state='blocked'`, s.expID)
 
 func (s *ExplorationStore) SetIntentState(id int64, state string) error {
 	// terminal states stamp completed_at; reopening (back to open/running) clears it.
-	terminal := state == "done" || state == "blocked" || state == "exhausted" || state == "stopped"
+	terminal := IntentTerminalState(state)
 	_, err := s.db.Exec(`UPDATE exploration_nodes
 SET state=$1, blocked_reason=NULL, content_version=content_version+1, completed_at = CASE WHEN $4 THEN now() ELSE NULL END
 WHERE id=$2 AND exploration_id=$3 AND kind='intent'`, state, id, s.expID, terminal)
@@ -361,7 +375,7 @@ WHERE id=$2 AND exploration_id=$3 AND kind='intent'`, state, id, s.expID, termin
 // state still matches expected. It is the state boundary used by pause/resume and
 // worker settlement, so a stale API read cannot overwrite a concurrent finish.
 func (s *ExplorationStore) CompareAndSetIntentState(id int64, expected, state string) (bool, error) {
-	terminal := state == "done" || state == "blocked" || state == "exhausted" || state == "stopped"
+	terminal := IntentTerminalState(state)
 	res, err := s.db.Exec(`UPDATE exploration_nodes
 SET state=$1, blocked_reason=NULL, content_version=content_version+1, completed_at = CASE WHEN $5 THEN now() ELSE NULL END
 WHERE id=$2 AND exploration_id=$3 AND kind='intent' AND state=$4`, state, id, s.expID, expected, terminal)

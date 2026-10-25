@@ -71,14 +71,7 @@ func markInheritedActivities(in []Activity, taskID int64) []Activity {
 	return in
 }
 
-func inheritedIntentTerminal(state string) bool {
-	switch state {
-	case "done", "blocked", "exhausted", "stopped":
-		return true
-	default:
-		return false
-	}
-}
+func inheritedIntentTerminal(state string) bool { return IntentTerminalState(state) }
 
 // ListByKindWithSources returns local nodes followed by nodes from each direct
 // source in relation order. The limit remains per exploration, matching the
