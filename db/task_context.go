@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -564,6 +565,39 @@ func (s *ExplorationStore) SetIntentBlockedReason(id int64, reason string) error
 SET state='blocked', blocked_reason=NULLIF($1,''), completed_at=now()
 WHERE id=$2 AND exploration_id=$3 AND kind='intent'`, reason, id, s.expID)
 	return err
+}
+
+// SetIntentProgress 合并写入意图的 payload.progress —— agent 自己汇报的"做到哪 / 还差
+// 什么 / 下一步"。意图撞预算变成 exhausted 时，规划者此前只能看到"这条结束了"，看不到
+// 完成到哪个分片、剩哪些候选，于是只能原样再开一条同义意图从头跑（线上 task#4 有 97% 的
+// 意图栽在这里）。进度落在节点上而不是只留在 transcript，规划者列意图时就能直接看到。
+func (s *ExplorationStore) SetIntentProgress(id int64, progress map[string]any) error {
+	raw, err := json.Marshal(progress)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`UPDATE exploration_nodes
+SET payload = payload || jsonb_build_object('progress', $1::jsonb), content_version=content_version+1
+WHERE id=$2 AND exploration_id=$3 AND kind='intent'`, string(raw), id, s.expID)
+	return err
+}
+
+// IntentProgress 读取意图已记录的进度（未记录时返回 nil, nil）。
+func (s *ExplorationStore) IntentProgress(id int64) (map[string]any, error) {
+	var raw []byte
+	err := s.db.QueryRow(`SELECT COALESCE(payload->'progress', 'null'::jsonb) FROM exploration_nodes
+WHERE id=$1 AND exploration_id=$2 AND kind='intent'`, id, s.expID).Scan(&raw)
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *ExplorationStore) ReopenIntentsByBlockedReason(reason string) (int64, error) {

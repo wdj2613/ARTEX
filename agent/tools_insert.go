@@ -655,6 +655,9 @@ func (t *ToolSet) WorkerTools() []actool.CoreTool {
 		t.searchAllWorkerTraces(), t.getWorkerTrace(),
 		// node_detail：worker 拿到 intent_id/节点 id 后可查该节点完整详情（配合上面的回看）。
 		t.nodeDetail(),
+		// report_progress：把"做到哪/还剩什么"写回意图节点。撞预算收尾后，规划者靠它决定
+		// 续跑还是换方向，而不是只能原样再开一条同义意图（见 agent/progress.go）。
+		t.reportProgress(),
 		// 以下工具仍【不给】worker，只留给 planner/main（读上下文、跨 work 复盘是规划职责，
 		// worker 只做单条意图的执行与写回）：list_facts / list_companies / list_worker_traces。
 	}

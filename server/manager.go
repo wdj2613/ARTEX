@@ -247,10 +247,28 @@ type Manager struct {
 	globalProxy string
 }
 
+// intentDedupModeOf 归一化 add_intent 去重闸的模式：off / warn / block，缺省与任何无法识别
+// 的值都按 warn（写错配置不该把闸悄悄关掉）。get 传入是为了免 DB 单测。
+func intentDedupModeOf(get func() (value string, ok bool, err error)) string {
+	v, ok, err := get()
+	if err != nil || !ok {
+		return "warn"
+	}
+	switch v = strings.ToLower(strings.TrimSpace(v)); v {
+	case "off", "warn", "block":
+		return v
+	}
+	return "warn"
+}
+
 // Settings keys the UI toggles at runtime.
 const (
 	settingTrafficCapture      = "traffic_capture"
 	settingAgentTrafficBinding = "agent_traffic_binding"
+	// settingAgentIntentDedup controls the add_intent near-duplicate gate:
+	// off / warn (default: create + warn) / block (refuse while a duplicate is
+	// still live). See agent/intent_dedup.go.
+	settingAgentIntentDedup = "agent_intent_dedup"
 	settingWebSearchOn         = "web_search_enabled"
 	settingWebSearchBackend    = "web_search_backend"
 	settingBraveKey            = "brave_search_api_key"

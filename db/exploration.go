@@ -304,6 +304,20 @@ func (s *ExplorationStore) DeleteGoal(id int64) error {
 	return nil
 }
 
+// IntentTerminalState reports whether state is a settled intent state. It is the
+// single source of truth for the terminal set: the store's own transitions
+// (SetIntentState / CompareAndSetIntentState) and callers outside the package
+// (e.g. the planner's kill_work tool) must agree on it, otherwise an intent can
+// look "running" to one side and "finished" to the other.
+func IntentTerminalState(state string) bool {
+	switch state {
+	case "done", "blocked", "exhausted", "stopped":
+		return true
+	default:
+		return false
+	}
+}
+
 // SetIntentState updates an intent node's state.
 // ResetRunningIntents returns any intent left in 'running' back to 'open' so it
 // is re-claimed. Called on startup: a 'running' intent with no live worker (a
@@ -350,7 +364,7 @@ WHERE exploration_id=$1 AND kind='intent' AND state='blocked'`, s.expID)
 
 func (s *ExplorationStore) SetIntentState(id int64, state string) error {
 	// terminal states stamp completed_at; reopening (back to open/running) clears it.
-	terminal := state == "done" || state == "blocked" || state == "exhausted" || state == "stopped"
+	terminal := IntentTerminalState(state)
 	_, err := s.db.Exec(`UPDATE exploration_nodes
 SET state=$1, blocked_reason=NULL, content_version=content_version+1, completed_at = CASE WHEN $4 THEN now() ELSE NULL END
 WHERE id=$2 AND exploration_id=$3 AND kind='intent'`, state, id, s.expID, terminal)
@@ -361,7 +375,7 @@ WHERE id=$2 AND exploration_id=$3 AND kind='intent'`, state, id, s.expID, termin
 // state still matches expected. It is the state boundary used by pause/resume and
 // worker settlement, so a stale API read cannot overwrite a concurrent finish.
 func (s *ExplorationStore) CompareAndSetIntentState(id int64, expected, state string) (bool, error) {
-	terminal := state == "done" || state == "blocked" || state == "exhausted" || state == "stopped"
+	terminal := IntentTerminalState(state)
 	res, err := s.db.Exec(`UPDATE exploration_nodes
 SET state=$1, blocked_reason=NULL, content_version=content_version+1, completed_at = CASE WHEN $5 THEN now() ELSE NULL END
 WHERE id=$2 AND exploration_id=$3 AND kind='intent' AND state=$4`, state, id, s.expID, expected, terminal)
@@ -1128,6 +1142,42 @@ func (s *ExplorationStore) FindingIntentsTerminal() (map[int64]int64, error) {
 			return nil, err
 		}
 		out[findingID] = intentID
+	}
+	return out, rows.Err()
+}
+
+// IntentDigest is a lightweight view of an intent, used for duplicate detection
+// when the planner proposes a new direction: only id, state and summary matter,
+// and pulling full nodes (payload + lineage) for a few hundred intents would be
+// wasteful.
+type IntentDigest struct {
+	ID      int64
+	State   string
+	Summary string
+}
+
+// IntentDigests returns the most recent intents of this exploration (id desc),
+// at most limit. Newest-first covers the near-duplicate case the planner actually
+// produces (a continuation of a direction it just worked on) without scanning the
+// whole graph every time add_intent is called.
+func (s *ExplorationStore) IntentDigests(limit int) ([]IntentDigest, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.Query(`SELECT id, state, COALESCE(payload->>'summary','') FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='intent'
+ORDER BY id DESC LIMIT $2`, s.expID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []IntentDigest
+	for rows.Next() {
+		var d IntentDigest
+		if err := rows.Scan(&d.ID, &d.State, &d.Summary); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
 	}
 	return out, rows.Err()
 }

@@ -3292,6 +3292,8 @@ func (s *Server) settingsPayload() map[string]any {
 	return map[string]any{
 		"traffic_capture":          s.m.TrafficEnabled(),
 		"agent_traffic_binding":    s.m.pg.GetBool(settingAgentTrafficBinding, false),
+		// add_intent 近似去重闸：off / warn（默认）/ block，见 agent/intent_dedup.go
+		"agent_intent_dedup": intentDedupModeOf(func() (string, bool, error) { return s.m.pg.GetSetting(settingAgentIntentDedup) }),
 		"llm_record":               s.m.LLMRecordEnabled(),
 		"web_search_enabled":       on,
 		"web_search_backend":       backend,
@@ -3380,6 +3382,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		// 重建 provider 链才生效，走下面的 changed → applyLLM 路径。
 		LLMPoolEnabled      *bool `json:"llm_pool_enabled"`
 		LLMPoolBindFallback *bool `json:"llm_pool_bind_fallback"`
+		// 意图近似去重闸模式(off/warn/block);每次 add_intent 读一次,即时生效。
+		AgentIntentDedup *string `json:"agent_intent_dedup"`
 		// 操作约束注入范围开关(默认都开);即时生效(planner/worker 每轮读),无需重建 agent。
 		ConstraintsInjectPlanner *bool `json:"constraints_inject_planner"`
 		ConstraintsInjectWorker  *bool `json:"constraints_inject_worker"`
@@ -3394,6 +3398,19 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, 400, err.Error())
 		return
+	}
+	if req.AgentIntentDedup != nil {
+		mode := strings.ToLower(strings.TrimSpace(*req.AgentIntentDedup))
+		switch mode {
+		case "off", "warn", "block":
+		default:
+			writeErr(w, 400, "agent_intent_dedup 只能是 off / warn / block")
+			return
+		}
+		if err := s.m.pg.SetSetting(settingAgentIntentDedup, mode); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
 	}
 	if req.ConstraintsInjectPlanner != nil {
 		if err := s.m.pg.SetBool(settingConstraintsInjectPlanner, *req.ConstraintsInjectPlanner); err != nil {

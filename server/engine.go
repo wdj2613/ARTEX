@@ -580,6 +580,12 @@ func (h steerHooks) PreToolUse(ctx context.Context, name string, input []byte) (
 		return true, "【规划者实时纠偏】" + msg +
 			"\n（这是规划者对本意图的即时指令；本次工具调用未执行，请据此调整下一步。若与你当前打算冲突，以此为准。）", nil
 	}
+	// 阻塞式 sleep 会原地烧光这条意图的一次性墙钟预算（线上曾有单任务 68 小时耗在这里），
+	// 在调用点拦住并给出后台执行 + 轮询的替代做法，比事后靠提示词劝更可靠。
+	if secs, blocked := blockingSleepSeconds(name, input); blocked {
+		log.Printf("[work %s] 拦截阻塞式 sleep %gs（改用后台执行 + 轮询）", h.label, secs)
+		return true, blockingSleepNudge(secs), nil
+	}
 	if h.inner != nil {
 		return h.inner.PreToolUse(ctx, name, input)
 	}
@@ -1103,6 +1109,7 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		if err := transitionIntentState(t.Store, intent.ID, "running", "exhausted"); err != nil {
 			log.Printf("[worker %s] task %s 意图 #%d 超时收尾状态落库失败: %v", name, t.ID, intent.ID, err)
 		}
+		recordIntentProgress(t.Store, intent.ID, "exhausted", harness.ReasonTimeout, wrote)
 		log.Printf("[worker %s] task %s 意图 #%d 因任务超时收尾结束(exhausted)，写回 %s", name, t.ID, intent.ID, wrote)
 		e.touch(t.ID)
 		return true
@@ -1113,6 +1120,7 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		if err := transitionIntentState(t.Store, intent.ID, "running", "stopped"); err != nil {
 			log.Printf("[worker %s] task %s 意图 #%d 终态停止落库失败: %v", name, t.ID, intent.ID, err)
 		}
+		recordIntentProgress(t.Store, intent.ID, "stopped", reason, wrote)
 		log.Printf("[worker %s] task %s 意图 #%d 因任务已完成而取消(stopped)", name, t.ID, intent.ID)
 		e.touch(t.ID)
 		return true
@@ -1122,6 +1130,7 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		if err := transitionIntentState(t.Store, intent.ID, "running", "stopped"); err != nil {
 			log.Printf("[worker %s] task %s 意图 #%d planner 停止落库失败: %v", name, t.ID, intent.ID, err)
 		}
+		recordIntentProgress(t.Store, intent.ID, "stopped", reason, wrote)
 		log.Printf("[worker %s] task %s 意图 #%d 被终止(stopped)", name, t.ID, intent.ID)
 		e.touch(t.ID)
 		t.Notify()
@@ -1149,6 +1158,8 @@ func (e *Engine) runIntent(ctx context.Context, t *Task, name string, worker *ag
 		if stateErr := transitionIntentState(t.Store, intent.ID, "running", state); stateErr != nil {
 			log.Printf("[worker %s] task %s 意图 #%d 终态 %s 落库失败: %v", name, t.ID, intent.ID, state, stateErr)
 		}
+		// 撞步数上限/超时变 exhausted 时，进度是规划者决定"续跑还是换方向"的唯一依据。
+		recordIntentProgress(t.Store, intent.ID, state, reason, wrote)
 	}
 	log.Printf("[worker %s] task %s 意图 #%d 结束: %s (写回 %s)", name, t.ID, intent.ID, state, wrote)
 	e.touch(t.ID)

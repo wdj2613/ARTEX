@@ -43,6 +43,13 @@ func compactIntents(ns []*db.Node, parentsOf, yieldsOf map[int64][]int64) []map[
 		if ys := yieldsOf[n.ID]; len(ys) > 0 {
 			m["yields"] = ys // 下游：本意图产生了哪些事实/发现
 		}
+		// progress：worker 自己汇报（或引擎终局自动补）的"做到哪/还剩什么"。撞预算变成
+		// exhausted 的意图靠它区分"跑完了"与"被打断"，避免规划者从头再开一条同义意图。
+		if pr, ok := p["progress"].(map[string]any); ok {
+			if brief := progressBrief(pr); brief != nil {
+				m["progress"] = brief
+			}
+		}
 		out = append(out, m)
 	}
 	return out
@@ -1025,23 +1032,23 @@ type intentItem struct {
 	Priority  int               `json:"priority"`
 }
 
-// addOneIntent 创建一条意图节点并连上游血缘，返回 id。
+// addOneIntent 创建一条意图节点并连上游血缘，返回 id 与去重提醒（未命中重复时为空）。
 // 约束：意图只能锚在已确认知识上——每个 parent_id 必须是已存在的 fact/finding
 // 节点（不能挂在别的意图/目标/提示上）。顶层全新方向留空 parent_ids，兜底连 origin fact。
 // 这样"每个意图都连到 fact 节点、且是发现驱动而非凭空规划"从创建路径上被强制。
-func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
+func (t *ToolSet) addOneIntent(it intentItem) (int64, string, error) {
 	if strings.TrimSpace(it.Summary) == "" {
-		return 0, fmt.Errorf("summary 不能为空")
+		return 0, "", fmt.Errorf("summary 不能为空")
 	}
 	// 先校验锚点（建节点前，避免坏锚点留下孤儿意图）。
 	parents := pidList(it.ParentIDs)
 	for _, pidv := range parents {
 		n, err := t.ts.GetNodeWithSources(pidv)
 		if err != nil || n == nil {
-			return 0, fmt.Errorf("parent_id %d 不存在于本任务或直接关联任务：parent_ids 必须是已存在的【事实(fact)/发现(finding)】节点 id；顶层全新方向请留空 parent_ids", pidv)
+			return 0, "", fmt.Errorf("parent_id %d 不存在于本任务或直接关联任务：parent_ids 必须是已存在的【事实(fact)/发现(finding)】节点 id；顶层全新方向请留空 parent_ids", pidv)
 		}
 		if n.Kind != db.KindFact && n.Kind != db.KindFinding {
-			return 0, fmt.Errorf("parent_id %d 是 %q 节点，不能作为意图锚点：意图只能锚在已确认的【事实(fact)/发现(finding)】上，不能挂在意图/目标/提示上；顶层全新方向请留空 parent_ids", pidv, n.Kind)
+			return 0, "", fmt.Errorf("parent_id %d 是 %q 节点，不能作为意图锚点：意图只能锚在已确认的【事实(fact)/发现(finding)】上，不能挂在意图/目标/提示上；顶层全新方向请留空 parent_ids", pidv, n.Kind)
 		}
 	}
 	priority := it.Priority
@@ -1053,7 +1060,7 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 	if t.as != nil && len(anchors) > 0 {
 		hits, err := t.as.CheckAssetsIntercept(t.taskID, anchors)
 		if err != nil {
-			return 0, fmt.Errorf("资产拦截校验失败：%w", err)
+			return 0, "", fmt.Errorf("资产拦截校验失败：%w", err)
 		}
 		if len(hits) > 0 {
 			var b strings.Builder
@@ -1061,16 +1068,27 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 			for _, h := range hits {
 				fmt.Fprintf(&b, "\n - %s", h.Describe())
 			}
-			return 0, fmt.Errorf("%s", b.String())
+			return 0, "", fmt.Errorf("%s", b.String())
 		}
 	}
 	payload := map[string]any{"summary": it.Summary}
 	if len(anchors) > 0 {
 		payload["asset_ids"] = anchors
 	}
+	// 近似去重闸：与本任务已有意图比对（显式 #id 引用 + 文本相似度），命中后按
+	// IntentDedupMode 决定拦下还是只提醒。这里拿不到 store 时（理论不会发生）放行，
+	// 不能让查重失败挡住规划本身。
+	digests, derr := t.ts.IntentDigests(200)
+	if derr != nil {
+		digests = nil
+	}
+	blocked, dupNote := duplicateIntents(it.Summary, digests)
+	if blocked != "" {
+		return 0, "", fmt.Errorf("%s", blocked)
+	}
 	id, err := t.ts.AddIntent(payload, priority, anchors, "planner")
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	// upstream lineage: link each (validated) fact/finding parent → this intent, so
 	// "multiple facts combine into one new intent" is expressible.
@@ -1085,12 +1103,13 @@ func (t *ToolSet) addOneIntent(it intentItem) (int64, error) {
 			_ = t.ts.Link(origin, db.RelDerivedFrom, id)
 		}
 	}
-	return id, nil
+	return id, dupNote, nil
 }
 
 func (t *ToolSet) addIntent() actool.CoreTool {
 	return t.writeExpTool("add_intent", "生成【探索方向】写入 frontier，并连入探索链路。意图是开放的探索方向，不是固定类型——用 summary 一句话自由描述要探索/验证/利用什么。\n"+
-		"★优先批量：一轮筛出的多个新方向放进 intents 数组一次提交（比逐条调用省往返）。返回 ids 数组，与 intents 等长同序（失败项 id=0，详情见 errors）。单条则省略 intents 直接给顶层 summary。",
+		"★优先批量：一轮筛出的多个新方向放进 intents 数组一次提交（比逐条调用省往返）。返回 ids 数组，与 intents 等长同序（失败项 id=0，详情见 errors）。单条则省略 intents 直接给顶层 summary。\n"+
+		"★尽量避免重复方向：返回里若出现 warnings（按 intents 下标），说明该条与本任务已有意图高度重复（summary 里写 #id，或与某条意图文本近似）——按提示处理：仍在场的用 steer_work 纠偏、已结束的要么把\"本轮新增什么\"写清楚要么就别开。",
 		obj(map[string]any{
 			"intents":    map[string]any{"type": "array", "description": "【优先用这个】要新增的探索方向数组，按顺序处理。每个元素字段同下方顶层字段（summary/asset_ids/parent_ids/priority）。返回 ids 与本数组等长、同序。", "items": map[string]any{"type": "object"}},
 			"summary":    str("[单条] 一句话描述这个探索方向：做什么+为什么。已写清方向即可，不依赖资产 id。"),
@@ -1112,14 +1131,18 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 
 			ids := make([]int64, len(items))
 			errs := map[string]string{}
+			notes := map[string]string{}
 			createdAny := false
 			for i, it := range items {
-				id, err := t.addOneIntent(it)
+				id, note, err := t.addOneIntent(it)
 				if err != nil {
 					errs[strconv.Itoa(i)] = err.Error()
 					continue
 				}
 				ids[i] = id
+				if note != "" {
+					notes[strconv.Itoa(i)] = note
+				}
 				createdAny = true
 			}
 
@@ -1131,15 +1154,23 @@ func (t *ToolSet) addIntent() actool.CoreTool {
 				t.resumeTask()
 			}
 
-			if !batch { // 单条：保持原返回
+			if !batch { // 单条：保持原返回，去重提醒附在正文后
 				if e, bad := errs["0"]; bad {
 					return actool.Errorf(e), nil
 				}
-				return actool.Text(fmt.Sprintf("intent created: %d", ids[0])), nil
+				text := fmt.Sprintf("intent created: %d", ids[0])
+				if note, dup := notes["0"]; dup {
+					text += "\n" + note
+				}
+				return actool.Text(text), nil
 			}
 			out := map[string]any{"ids": ids}
 			if len(errs) > 0 {
 				out["errors"] = errs
+			}
+			// warnings 按 intents 下标给出：命中去重闸的那几条，见 agent/intent_dedup.go
+			if len(notes) > 0 {
+				out["warnings"] = notes
 			}
 			return jsonResult(out)
 		})
@@ -1673,8 +1704,17 @@ func (t *ToolSet) addHint() actool.CoreTool {
 }
 
 // killWorkTool lets the planner terminate a single running work (by intent id).
+//
+// 幂等语义：意图是一次性 work，没有运行中的 work 手柄并不等于"终止失败"。
+//   - 已结束（done/blocked/exhausted/stopped）→ 无需终止，直接回报状态，不报错；
+//   - 尚未被领取（open/paused）→ 直接落 stopped，避免它被 worker 领取后再白跑一轮；
+//   - 运行中（running）→ 发终止信号（worker 侧按 killed_by_planner 收尾）。
+//
+// 线上数据里 kill_work 有 78% 的调用落在"意图其实已经结束"上（规划者被意图收尾唤醒
+// 后回头去杀它），此前一律返回错误，既误导模型又让失控意图没人收：改用幂等语义后，
+// 同一个动作在任何状态下都有确定结果。
 func (t *ToolSet) killWorkTool() actool.CoreTool {
-	return t.writeExpTool("kill_work", "终止一条正在运行的意图(work)。用于叫停跑偏/无意义的探索；被终止的意图标记为 stopped，不再自动重领。先用 get_worker_output 看看它在干嘛再决定。",
+	return t.writeExpTool("kill_work", "终止一条意图(work)。用于叫停跑偏/无意义的探索；被终止的意图标记为 stopped，不再自动重领。**幂等**：对已结束的意图调用会直接回报其状态而不报错；对尚未被领取的意图会直接标记 stopped。先用 get_worker_output 看看它在干嘛再决定。",
 		obj(map[string]any{"intent_id": idp("要终止的意图 id（= work 句柄）")}, "intent_id"),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			if t.killWork == nil {
@@ -1692,11 +1732,50 @@ func (t *ToolSet) killWorkTool() actool.CoreTool {
 			if err != nil || node == nil || node.Kind != db.KindIntent {
 				return actool.Errorf("intent_id 必须是本任务的意图（关联任务意图只读）"), nil
 			}
+			switch classifyKillWork(node.State) {
+			case killWorkAlreadyDone:
+				return actool.Text(fmt.Sprintf("意图 %d 已结束（state=%s），无需终止", id, node.State)), nil
+			case killWorkStopOpen:
+				ok, casErr := t.ts.CompareAndSetIntentState(id, node.State, "stopped")
+				if casErr != nil {
+					return actool.Errorf(fmt.Sprintf("意图 %d 标记 stopped 失败: %v", id, casErr)), nil
+				}
+				if ok {
+					return actool.Text(fmt.Sprintf("意图 %d 当前未在执行（state=%s），已直接标记 stopped，不会被任何 worker 领取", id, node.State)), nil
+				}
+				// 状态在读取与 CAS 之间变了（多半是刚被 worker 领取）→ 按运行中处理。
+			}
 			if err := t.killWork(id); err != nil {
+				// 竞态兜底：终止信号到达前 work 刚好自己收尾了 → 仍按幂等成功回报。
+				if cur, getErr := t.ts.GetNode(id); getErr == nil && cur != nil && classifyKillWork(cur.State) == killWorkAlreadyDone {
+					return actool.Text(fmt.Sprintf("意图 %d 已结束（state=%s），无需终止", id, cur.State)), nil
+				}
 				return actool.Errorf(err.Error()), nil
 			}
 			return actool.Text(fmt.Sprintf("已向意图 %d 的 work 发送终止信号", id)), nil
 		})
+}
+
+// killWorkAction 是 kill_work 对一条意图应采取的动作，仅取决于意图当前的节点状态。
+type killWorkAction int
+
+const (
+	killWorkSignal      killWorkAction = iota // 运行中 → 向 work 发终止信号
+	killWorkStopOpen                          // 未领取（open/paused）→ 直接落 stopped
+	killWorkAlreadyDone                       // 已是终态 → 幂等回报，不报错
+)
+
+// classifyKillWork 把意图状态映射成 kill_work 的动作。终态判定复用 db.IntentTerminalState
+// （意图状态机的唯一事实源），避免工具层与存储层对"已结束"的理解发生漂移。
+func classifyKillWork(state string) killWorkAction {
+	switch {
+	case db.IntentTerminalState(state):
+		return killWorkAlreadyDone
+	case state == "open", state == "paused":
+		return killWorkStopOpen
+	default: // running，以及任何未知新状态 → 交给运行中的 work 去终止
+		return killWorkSignal
+	}
 }
 
 // steerWorkTool lets the planner inject a mid-run course-correction into a running

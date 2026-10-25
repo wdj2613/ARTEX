@@ -268,6 +268,24 @@ func workerArtifactSpec(runDir string) string {
 	return "\n\n**中间产物输出规约**：脚本、payload、抓到的响应体、临时数据等一切中间产物，**一律写到本次意图的专属工作目录 " + runDir + "**（已自动建好，直接用相对路径写在这里即可，无需再手动建目录）——**不要写 /tmp、不要用其它绝对路径**。"
 }
 
+// workerWaitSpec is 段 [D]: how to wait for long-running work. Code-owned and appended
+// after the DB-rendered body, so editing the prompt in the UI can never drop it. The
+// worker's wall-clock budget (agents.run_seconds, one shot per intent) is the reason
+// this rule exists: a blocking `sleep` burns the budget in place and produces nothing.
+func workerWaitSpec() string {
+	return "\n\n**等待类任务的执行方式**（本意图的墙钟预算是一次性的：阻塞等待会把预算原地烧光，期间不产生任何进展，超时后意图直接 exhausted）：\n" +
+		"- **长跑任务一律后台**：Bash 传 `run_in_background: true`（或命令自带 `nohup … > run.out 2>&1 &`）立即拿到 task id，再用 `TaskOutput{task_id:\"…\"}` 读增量输出，完成时你会收到通知；\n" +
+		"- **盯进度只取指标**：后台任务的产物已落盘，用 `tail -n 20 run.out` / `grep -c 命中 run.log` 看关键行，不要整文件 `cat`；\n" +
+		"- **禁止用 `sleep` 等待**：单次 `sleep` 不得超过 30 秒，更长的阻塞等待会被平台直接拦掉；需要继续等就再轮询一次，把\"发起 → 抽查 → 写回结论\"做完就收尾。\n"
+}
+
+// workerProgressSpec is 段 [E]: 进度留痕的约定。意图是一次性时间预算，撞上限就被迫收尾，
+// 收尾时平台只能把"最后一次汇报"留给规划者——不汇报就等于这次白跑（线上 task#4 有 212 条
+// 意图 exhausted，其中多数续跑都是从零重来）。代码-owned，改 DB 提示词也丢不掉。
+func workerProgressSpec() string {
+	return "\n\n**进度留痕**（收尾后规划者只认这个）：每推完一个分片（一批主机/一批接口/一个候选面）就调一次 `report_progress`，写清 `completed`（做完什么）、`remaining`（还剩哪些候选）、`next_step`。意图撞到步数/墙钟上限会被强制收尾，平台把你**最后一次汇报**留给规划者；一次都没汇报，下一条续跑意图只能从头再来，等于这次预算白烧。"
+}
+
 // ensureRunDir builds and creates an agent's working directory under base:
 // <base>/tasks/<taskID> for planner/main; <base>/tasks/<taskID>/i<intentID> for a
 // worker (intentID<=0 → task dir only). The "tasks/" segment groups per-task dirs
@@ -290,7 +308,7 @@ func workerSystem(proxyAddr, caCert, dataDir, runDir string) string {
 	// caCert is present only when the recording MITM is on, which is exactly when
 	// the traffic_* tools are registered — so it gates the traffic-tool note.
 	// Optional finding guidance is added for every role after tool resolution.
-	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir)
+	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + workerWaitSpec() + workerProgressSpec()
 }
 
 // renderIntentTask formats the claimed intent for the worker's launch USER message:
