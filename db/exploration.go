@@ -1146,6 +1146,42 @@ func (s *ExplorationStore) FindingIntentsTerminal() (map[int64]int64, error) {
 	return out, rows.Err()
 }
 
+// IntentDigest is a lightweight view of an intent, used for duplicate detection
+// when the planner proposes a new direction: only id, state and summary matter,
+// and pulling full nodes (payload + lineage) for a few hundred intents would be
+// wasteful.
+type IntentDigest struct {
+	ID      int64
+	State   string
+	Summary string
+}
+
+// IntentDigests returns the most recent intents of this exploration (id desc),
+// at most limit. Newest-first covers the near-duplicate case the planner actually
+// produces (a continuation of a direction it just worked on) without scanning the
+// whole graph every time add_intent is called.
+func (s *ExplorationStore) IntentDigests(limit int) ([]IntentDigest, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := s.db.Query(`SELECT id, state, COALESCE(payload->>'summary','') FROM exploration_nodes
+WHERE exploration_id=$1 AND kind='intent'
+ORDER BY id DESC LIMIT $2`, s.expID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []IntentDigest
+	for rows.Next() {
+		var d IntentDigest
+		if err := rows.Scan(&d.ID, &d.State, &d.Summary); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 // Frontier returns open intents ordered by priority desc then id (FIFO tiebreak).
 func (s *ExplorationStore) Frontier(limit int) ([]*Node, error) {
 	if limit <= 0 {
