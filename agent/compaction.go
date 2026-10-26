@@ -39,25 +39,41 @@ type Compactor struct {
 	n, m     int           // minor / major thresholds (§7 N=20, M=8)
 	cooldown time.Duration // min gap between compactions per task (§7 60s)
 	maxDur   time.Duration // hard cap on one background compaction
+	perBlock time.Duration // hard cap on ONE block's LLM call
 
 	mu      sync.Mutex
 	running map[int64]bool
 	lastRun map[int64]time.Time
+	// Per-block failure memory, keyed by block signature. A block that the model
+	// refuses (empty body) or times out on must not be re-sent on every planner
+	// round: that burned ~2.3M input tokens/day in production while covering
+	// nothing. Failures therefore buy an exponential cooldown measured in
+	// planner rounds; a success (or a content change → new signature) resets it.
+	blockFails      map[string]int
+	blockRetryAfter map[string]int64
 }
+
+// maxFoldSplitDepth bounds how many times a failing block is halved before we
+// give up on it for this round (2 → down to a quarter, which is always small
+// enough for the §4 prompt).
+const maxFoldSplitDepth = 2
 
 // NewCompactor builds a compactor. prov/model are used for the §4 body LLM call
 // (same model the agent runs on, per §4). A nil Compactor is a safe no-op.
 func NewCompactor(prov llm.Provider, model string) *Compactor {
 	return &Compactor{
-		prov:     prov,
-		model:    model,
-		params:   defaultColdParams(),
-		n:        20,
-		m:        8,
-		cooldown: 60 * time.Second,
-		maxDur:   5 * time.Minute,
-		running:  map[int64]bool{},
-		lastRun:  map[int64]time.Time{},
+		prov:            prov,
+		model:           model,
+		params:          defaultColdParams(),
+		n:               20,
+		m:               8,
+		cooldown:        60 * time.Second,
+		maxDur:          5 * time.Minute,
+		perBlock:        60 * time.Second,
+		running:         map[int64]bool{},
+		lastRun:         map[int64]time.Time{},
+		blockFails:      map[string]int{},
+		blockRetryAfter: map[string]int64{},
 	}
 }
 
@@ -179,7 +195,7 @@ func (c *Compactor) minor(ctx context.Context, ts *db.ExplorationStore) {
 		return // this batch has no ≥2 connected/shared-parent block — nothing to fold (§7)
 	}
 	for _, b := range blocks {
-		c.foldBlock(ctx, ts, g, b, nodeByID, cvers, c.generationFor(b, nil))
+		c.foldBlock(ctx, ts, g, b, nodeByID, cvers, c.generationFor(b, nil), round)
 	}
 	// A minor may have pushed the segment count over M → merge in the same run.
 	if ad, e := ts.ActiveDigests(); e == nil && len(ad) >= c.m {
@@ -187,11 +203,54 @@ func (c *Compactor) minor(ctx context.Context, ts *db.ExplorationStore) {
 	}
 }
 
+// staleDigest is one active digest considered for retirement during a major.
+type staleDigest struct {
+	id      int64
+	members []int64
+}
+
+// retirableDigests returns the stale digests whose every member is covered again
+// — either by a digest that survives this round or by one just created.
+//
+// Superseding a digest deletes its covers edges, so retiring one whose
+// replacement failed silently un-covers its members. That is what used to make
+// late-stage compaction loop forever: coverage vanished, the uncompressed cold
+// set grew back past the minor threshold, and the same oversized block was
+// compressed (and refused by the model) again on every planner round.
+func retirableDigests(stale []staleDigest, survivors []staleDigest, created [][]int64) []int64 {
+	covered := map[int64]bool{}
+	for _, m := range created {
+		for _, id := range m {
+			covered[id] = true
+		}
+	}
+	for _, d := range survivors {
+		for _, id := range d.members {
+			covered[id] = true
+		}
+	}
+	var out []int64
+	for _, d := range stale {
+		ok := true
+		for _, id := range d.members {
+			if !covered[id] {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			out = append(out, d.id)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
+}
+
 // major re-derives the whole grouping from source over ALL eligible-cold nodes
 // (§5.1 回源重压), then reconciles against the active digests by signature:
-// unchanged blocks keep their digest (no LLM), stale digests are superseded, and
-// new/changed blocks are compressed afresh. This is where tiered fragments of one
-// direction merge and where "later became connected" blocks unify (§5.2).
+// unchanged blocks keep their digest (no LLM), new/changed blocks are compressed
+// afresh, and old digests are retired only once their members are covered again
+// (§5.1 one-member-one-digest, without ever leaving a member uncovered).
 func (c *Compactor) major(ctx context.Context, ts *db.ExplorationStore) {
 	round, err := ts.RoundNo()
 	if err != nil {
@@ -232,37 +291,81 @@ func (c *Compactor) major(ctx context.Context, ts *db.ExplorationStore) {
 		}
 		toCreate = append(toCreate, b)
 	}
-	// Supersede stale digests FIRST (atomic drop of their covers edges) so a member
-	// is never covered by both an old and a new digest (§5.1 one-member-one-digest).
-	var stale []int64
+	// Which digests are no longer wanted, and which of them stay alive (their
+	// signature is still desired). Members of the survivors count as covered.
+	var staleD, surviveD []staleDigest
 	for _, d := range active {
 		sig, _ := digestSigGen(d)
+		members := digestMemberIDs(d)
 		if !desired[sig] {
-			stale = append(stale, d.ID)
+			staleD = append(staleD, staleDigest{id: d.ID, members: members})
+			continue
+		}
+		surviveD = append(surviveD, staleDigest{id: d.ID, members: members})
+	}
+	// Create FIRST: retirement is decided afterwards from what actually got
+	// covered, so a failed compression can never erase existing coverage.
+	created := make([][]int64, 0, len(toCreate))
+	for _, b := range toCreate {
+		if cov := c.foldBlock(ctx, ts, g, b, nodeByID, cvers, c.generationFor(b, active), round); len(cov) > 0 {
+			created = append(created, cov)
 		}
 	}
-	if err := ts.SupersedeDigests(stale); err != nil {
+	retire := retirableDigests(staleD, surviveD, created)
+	if err := ts.SupersedeDigests(retire); err != nil {
 		log.Printf("[compaction] supersede exp=%d: %v", ts.ID(), err)
-	}
-	for _, b := range toCreate {
-		c.foldBlock(ctx, ts, g, b, nodeByID, cvers, c.generationFor(b, active))
 	}
 }
 
-// foldBlock compresses one block and writes its digest — with a commit-time
-// liveness recheck (§ concurrency): between grouping and write the graph may have
-// changed, so any member that has since gone hot (revived) is dropped from the
-// covers set. If the block dissolves below K it is skipped.
-func (c *Compactor) foldBlock(ctx context.Context, ts *db.ExplorationStore, g *coldGraph, b block, nodeByID map[int64]*db.Node, cvers map[int64]int, generation int) {
+// foldBlock compresses one block and writes its digests, halving the block and
+// retrying if the model cannot handle it. Returns the member ids that ended up
+// covered (empty when the whole block was refused).
+//
+// A commit-time liveness recheck (§ concurrency) drops any member that went hot
+// while its body was being generated, so a digest never covers a hot node; a
+// block that dissolves below K is skipped.
+func (c *Compactor) foldBlock(ctx context.Context, ts *db.ExplorationStore, g *coldGraph, b block, nodeByID map[int64]*db.Node, cvers map[int64]int, generation int, round int64) []int64 {
+	return c.foldDepth(ctx, ts, g, b, nodeByID, cvers, generation, round, 0)
+}
+
+func (c *Compactor) foldDepth(ctx context.Context, ts *db.ExplorationStore, g *coldGraph, b block, nodeByID map[int64]*db.Node, cvers map[int64]int, generation int, round int64, depth int) []int64 {
+	if len(b.Members) < c.params.K {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return nil // whole-run budget spent — don't start (or split) more work
+	}
+	sig := blockSignature(b, cvers)
+	if c.retryBlocked(sig, round) {
+		return nil
+	}
 	body, err := c.compress(ctx, g, b, nodeByID)
 	if err != nil {
+		// Too big for the model, or the provider hiccuped: halve instead of
+		// dropping the whole block. Half-blocks cover half the nodes, which is
+		// what breaks the "oversized block can never be folded" deadlock.
+		if depth < maxFoldSplitDepth && len(b.Members) >= 2*c.params.K {
+			mid := len(b.Members) / 2
+			var covered []int64
+			for _, half := range []block{
+				{Members: b.Members[:mid], Anchors: b.Anchors},
+				{Members: b.Members[mid:], Anchors: b.Anchors},
+			} {
+				covered = append(covered, c.foldDepth(ctx, ts, g, half, nodeByID, cvers, generation, round, depth+1)...)
+			}
+			if len(covered) > 0 {
+				log.Printf("[compaction] split exp=%d block=%d members -> covered %d: %v", ts.ID(), len(b.Members), len(covered), err)
+				return covered
+			}
+		}
+		c.noteBlockFailure(sig, round)
 		log.Printf("[compaction] compress exp=%d block=%v: %v", ts.ID(), b.Members, err)
-		return
+		return nil
 	}
 	// Re-read fresh state and drop any member that revived while we compressed.
 	fresh, _, err := loadColdGraph(ts)
 	if err != nil {
-		return
+		return nil
 	}
 	freshHot := fresh.hotSet()
 	members := make([]int64, 0, len(b.Members))
@@ -272,13 +375,48 @@ func (c *Compactor) foldBlock(ctx context.Context, ts *db.ExplorationStore, g *c
 		}
 	}
 	if len(members) < c.params.K {
-		return // block revived out from under us — leave those nodes hot, don't fold
+		return nil // block revived out from under us — leave those nodes hot, don't fold
 	}
 	final := block{Members: members, Anchors: b.Anchors}
 	payload := digestPayload(body, final, nodeByID, generation, blockSignature(final, cvers))
-	if _, err := ts.AddDigest(payload, members); err != nil {
+	id, err := ts.AddDigest(payload, members)
+	if err != nil {
 		log.Printf("[compaction] add digest exp=%d: %v", ts.ID(), err)
+		return nil
 	}
+	c.noteBlockSuccess(sig)
+	log.Printf("[compaction] ok exp=%d digest=%d members=%d chars=%d", ts.ID(), id, len(members), len(body))
+	return members
+}
+
+// retryBlocked reports whether a failing block is still inside its backoff
+// window (measured in planner rounds).
+func (c *Compactor) retryBlocked(sig string, round int64) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if at, ok := c.blockRetryAfter[sig]; ok && round < at {
+		return true
+	}
+	return false
+}
+
+// noteBlockFailure buys an exponential backoff of 1, 2, 4, then 8 rounds.
+func (c *Compactor) noteBlockFailure(sig string, round int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.blockFails[sig]++
+	n := c.blockFails[sig]
+	if n > 4 {
+		n = 4
+	}
+	c.blockRetryAfter[sig] = round + int64(1)<<uint(n-1)
+}
+
+func (c *Compactor) noteBlockSuccess(sig string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.blockFails, sig)
+	delete(c.blockRetryAfter, sig)
 }
 
 // generationFor computes a digest's重摘代次 (§1): 1 for a fresh fold; for a major
@@ -510,8 +648,16 @@ func buildCompressionInput(g *coldGraph, b block, nodeByID map[int64]*db.Node) s
 }
 
 // compress runs the §4 body LLM call on one block. Uses the same model the agent
-// runs on; thinking disabled (a pure summarization step).
+// runs on; thinking disabled (a pure summarization step). Each call gets its own
+// deadline so one slow block cannot consume the whole run's budget and starve
+// every block behind it (production saw 20 blocks fail at once when the shared
+// 5-minute budget ran out).
 func (c *Compactor) compress(ctx context.Context, g *coldGraph, b block, nodeByID map[int64]*db.Node) (string, error) {
+	if c.perBlock > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, c.perBlock)
+		defer cancel()
+	}
 	req := llm.CompletionRequest{
 		System:    []string{compressionSystemPrompt},
 		Messages:  []llm.Message{llm.UserText(buildCompressionInput(g, b, nodeByID))},
