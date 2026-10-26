@@ -40,9 +40,17 @@ type cgEdge struct {
 type coldParams struct {
 	R int // debounce: a node must be continuously inactive ≥R planner rounds (§7 R=6)
 	K int // min block size to fold; K=2 skips only degenerate singletons (§7 K=2)
+	// MaxMembers caps how many nodes one block may fold. The cold set only grows
+	// over a task's lifetime, so without a cap an entire direction eventually
+	// merges into ONE block of hundreds of members; the §4 prompt then exceeds
+	// what the model will answer (observed in production: 360+ member blocks
+	// always returned an empty body or hit the gateway timeout, so they could
+	// never be folded and were retried every planner round). Oversized
+	// components are partitioned into locality-preserving chunks instead (§3①).
+	MaxMembers int
 }
 
-func defaultColdParams() coldParams { return coldParams{R: 6, K: 2} }
+func defaultColdParams() coldParams { return coldParams{R: 6, K: 2, MaxMembers: 40} }
 
 // coldGraph is an in-memory adjacency view over real exploration edges. The
 // derived view layer (kind=digest nodes, rel=covers edges) is filtered out at
@@ -241,6 +249,8 @@ func (g *coldGraph) group(set map[int64]bool, p coldParams) []block {
 		}
 	}
 	// Emit surviving components as blocks, each with its external-parent anchors.
+	// A component larger than MaxMembers is partitioned into chunks so one block
+	// always stays compressible (§3① locality split).
 	comps = uf.components()
 	var blocks []block
 	for _, ids := range comps {
@@ -248,33 +258,123 @@ func (g *coldGraph) group(set map[int64]bool, p coldParams) []block {
 			continue
 		}
 		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-		memberSet := make(map[int64]bool, len(ids))
-		for _, m := range ids {
-			memberSet[m] = true
-		}
-		anchorSet := map[int64]bool{}
-		for _, m := range ids {
-			for _, par := range g.parents[m] {
-				if memberSet[par] {
-					continue
-				}
-				pn, ok := g.nodes[par]
-				if !ok || pn.Kind == db.KindDigest {
-					continue
-				}
-				anchorSet[par] = true
+		for _, chunk := range g.partition(ids, p.MaxMembers) {
+			if len(chunk) < p.K {
+				continue
 			}
+			blocks = append(blocks, g.blockFor(chunk))
 		}
-		anchors := make([]int64, 0, len(anchorSet))
-		for a := range anchorSet {
-			anchors = append(anchors, a)
-		}
-		sort.Slice(anchors, func(i, j int) bool { return anchors[i] < anchors[j] })
-		blocks = append(blocks, block{Members: ids, Anchors: anchors})
 	}
 	// Deterministic order: by smallest member id.
 	sort.Slice(blocks, func(i, j int) bool { return blocks[i].Members[0] < blocks[j].Members[0] })
 	return blocks
+}
+
+// partition cuts one connected component into chunks of at most maxN members.
+// Chunks follow graph locality (BFS from the smallest unvisited id, cut when
+// full) rather than being a flat slice of sorted ids, so a chunk stays one
+// traversal neighbourhood and its members still share context.
+//
+// Adjacency is "real edges among members" PLUS "same common parent": rule ②
+// rescues flat fan-outs (many cold leaves under one hot parent) which carry no
+// edge between themselves, and BFS over real edges alone would split such a
+// component back into singletons.
+func (g *coldGraph) partition(ids []int64, maxN int) [][]int64 {
+	if maxN <= 0 || len(ids) <= maxN {
+		return [][]int64{ids}
+	}
+	in := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		in[id] = true
+	}
+	adj := make(map[int64][]int64, len(ids))
+	for _, id := range ids {
+		for _, nb := range g.neighbours(id) {
+			if in[nb] {
+				adj[id] = append(adj[id], nb)
+			}
+		}
+	}
+	byParent := map[int64][]int64{}
+	for _, id := range ids {
+		for _, par := range g.parents[id] {
+			if !in[par] {
+				byParent[par] = append(byParent[par], id)
+			}
+		}
+	}
+	for _, sibs := range byParent {
+		if len(sibs) < 2 {
+			continue
+		}
+		for _, id := range sibs {
+			adj[id] = append(adj[id], sibs...)
+		}
+	}
+	seen := make(map[int64]bool, len(ids))
+	var out [][]int64
+	for _, seed := range ids { // ids are sorted → deterministic chunk seeds
+		if seen[seed] {
+			continue
+		}
+		chunk := make([]int64, 0, maxN)
+		queue := []int64{seed}
+		for len(queue) > 0 && len(chunk) < maxN {
+			cur := queue[0]
+			queue = queue[1:]
+			if seen[cur] { // re-queued via another edge; already assigned
+				continue
+			}
+			seen[cur] = true
+			chunk = append(chunk, cur)
+			for _, nb := range adj[cur] {
+				if !seen[nb] {
+					queue = append(queue, nb)
+				}
+			}
+		}
+		// Anything still queued stays unseen and becomes a later chunk's seed,
+		// so every member is assigned exactly once.
+		sort.Slice(chunk, func(i, j int) bool { return chunk[i] < chunk[j] })
+		out = append(out, chunk)
+	}
+	return out
+}
+
+// neighbours returns a node's adjacent ids in both directions (children first).
+func (g *coldGraph) neighbours(id int64) []int64 {
+	out := make([]int64, 0, len(g.children[id])+len(g.parents[id]))
+	out = append(out, g.children[id]...)
+	out = append(out, g.parents[id]...)
+	return out
+}
+
+// blockFor builds a block from one member set, collecting the external (non
+// member, non digest) parents as context anchors (§3.1).
+func (g *coldGraph) blockFor(ids []int64) block {
+	memberSet := make(map[int64]bool, len(ids))
+	for _, m := range ids {
+		memberSet[m] = true
+	}
+	anchorSet := map[int64]bool{}
+	for _, m := range ids {
+		for _, par := range g.parents[m] {
+			if memberSet[par] {
+				continue
+			}
+			pn, ok := g.nodes[par]
+			if !ok || pn.Kind == db.KindDigest {
+				continue
+			}
+			anchorSet[par] = true
+		}
+	}
+	anchors := make([]int64, 0, len(anchorSet))
+	for a := range anchorSet {
+		anchors = append(anchors, a)
+	}
+	sort.Slice(anchors, func(i, j int) bool { return anchors[i] < anchors[j] })
+	return block{Members: ids, Anchors: anchors}
 }
 
 // blockSignature is the change-detection key (§5.3): a hash over the sorted
