@@ -176,13 +176,12 @@ function relTime(ts: number, now: number): string {
   return `${Math.floor(sec / 86400)} 天前`;
 }
 
-const dayFmt = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric", weekday: "short" });
-const clockFmt = new Intl.DateTimeFormat("zh-CN", {
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  hour12: false,
-});
+// 拆成两段自己拼:Intl 的 zh-CN 会输出「7月26日周日」黏在一起，加个空格更好读。
+const dayFmt = new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" });
+const weekdayFmt = new Intl.DateTimeFormat("zh-CN", { weekday: "short" });
+const dayLabel = (ts: number) => `${dayFmt.format(ts)} ${weekdayFmt.format(ts)}`;
+// 行首只显示到分钟:左侧时间栏越窄,正文能占的宽度越大(完整时间在 title 与展开区里)。
+const shortClockFmt = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
 
 function NodeStateBadge({ node }: { node: TaskNode }) {
   if (node.type === "goal") return <StatusBadge domain="goal" value={node.state} dot />;
@@ -346,28 +345,34 @@ function BroadcastRow({
   const downstream = edges.filter((e) => e.src === node.id).map((e) => ({ rel: e.rel, id: e.dst }));
 
   return (
-    <div className={cn("relative grid grid-cols-[4.5rem_1.75rem_1fr] gap-x-2", fresh && "bg-primary/5")}>
-      {/* 时间列 */}
-      <div className="py-3 text-right text-xs text-muted-foreground tabular-nums">
-        <div>{Number.isNaN(ts) ? "--:--:--" : clockFmt.format(ts)}</div>
-        <div className="text-[11px] opacity-70">{relTime(ts, now)}</div>
-      </div>
-
-      {/* 时间轴:竖线 + 类型圆点 */}
-      <div className="relative flex justify-center">
-        <span className="absolute inset-y-0 w-px bg-border" />
+    <div className={cn("relative flex gap-2 sm:gap-3", fresh && "bg-primary/5")}>
+      {/* 左侧窄栏:时间在上、类型图标在下(竖排),再把时间轴竖线穿过去。
+          原来是「时间列 4.5rem + 图标列 1.75rem」两列横排，光左侧就吃掉 108px
+          (390px 屏上占三分之一)，正文只剩 184px。收成一列 2.5rem 后正文多出 ~70px。 */}
+      <div className="relative flex w-10 shrink-0 flex-col items-center pt-2.5">
+        <span aria-hidden className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border" />
+        <time
+          dateTime={Number.isNaN(ts) ? undefined : new Date(ts).toISOString()}
+          title={Number.isNaN(ts) ? node.ts : new Date(ts).toLocaleString("zh-CN")}
+          className="relative z-10 rounded bg-card px-1 text-[11px] leading-4 text-muted-foreground tabular-nums"
+        >
+          {Number.isNaN(ts) ? "--:--" : shortClockFmt.format(ts)}
+        </time>
         <span
           className={cn(
-            "relative mt-3.5 flex size-6 items-center justify-center rounded-full text-white ring-4 ring-background",
+            "relative z-10 mt-0.5 flex size-5 items-center justify-center rounded-full text-white ring-2 ring-background",
             meta.dot,
           )}
         >
-          <Icon className="size-3.5" />
+          <Icon className="size-3" />
+        </span>
+        <span className="relative z-10 mt-1 rounded bg-card px-1 text-[10px] leading-3 whitespace-nowrap text-muted-foreground">
+          {relTime(ts, now)}
         </span>
       </div>
 
       {/* 内容列 */}
-      <div className="min-w-0 border-b py-3 pr-1 last:border-b-0">
+      <div className="min-w-0 flex-1 border-b py-2.5 last:border-b-0">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
@@ -391,7 +396,7 @@ function BroadcastRow({
               )}
               <span className="ml-auto shrink-0 text-xs text-muted-foreground">{node.origin || "system"}</span>
             </div>
-            <p className={cn("mt-1 text-sm", !open && "line-clamp-2")}>{summary || `节点 #${node.id}`}</p>
+            <p className={cn("mt-1 text-sm break-words", !open && "line-clamp-3")}>{summary || `节点 #${node.id}`}</p>
           </div>
         </button>
 
@@ -558,7 +563,7 @@ export function BroadcastTab({ taskId }: { taskId: string }) {
   const groups: Array<{ day: string; rows: TaskNode[] }> = [];
   for (const node of items) {
     const ts = Date.parse(node.ts);
-    const day = Number.isNaN(ts) ? "未知日期" : dayFmt.format(ts);
+    const day = Number.isNaN(ts) ? "未知日期" : dayLabel(ts);
     const last = groups[groups.length - 1];
     if (last && last.day === day) last.rows.push(node);
     else groups.push({ day, rows: [node] });
@@ -650,7 +655,7 @@ export function BroadcastTab({ taskId }: { taskId: string }) {
         </button>
       )}
 
-      <CardContent className="px-4 py-0">
+      <CardContent className="px-2 py-0 sm:px-4">
         {!loaded ? (
           <div className="flex flex-col gap-3 py-4">
             {[0, 1, 2, 3].map((i) => (
@@ -664,7 +669,7 @@ export function BroadcastTab({ taskId }: { taskId: string }) {
         ) : (
           groups.map((group) => (
             <div key={group.day}>
-              <div className="py-2 pl-[6.25rem] text-xs font-medium text-muted-foreground">{group.day}</div>
+              <div className="py-2 pl-12 text-xs font-medium text-muted-foreground">{group.day}</div>
               {group.rows.map((node) => (
                 <BroadcastRow
                   key={node.id}
