@@ -712,7 +712,7 @@ export function CoverageGraphTab({ taskId, coverageEnabled = true }: { taskId: s
   return (
     <Card>
       <CardContent className="p-0">
-        <div className="h-[72vh] w-full overflow-hidden rounded-xl">
+        <div className="h-[72dvh] w-full overflow-hidden rounded-xl">
           <GraphInner taskId={taskId} coverageEnabled={coverageEnabled} />
         </div>
       </CardContent>

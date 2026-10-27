@@ -970,75 +970,78 @@ export default function DashboardPage() {
             </Link>
           </div>
         </div>
-        <table className="w-full border-collapse text-xs">
-          <thead>
-            <tr className="border-b">
-              {["任务", "状态", "引擎", "目标进度", "在途", "最近活动"].map((h) => (
-                <th
-                  key={h}
-                  className="px-4 py-2 text-left text-[9px] font-semibold uppercase tracking-widest text-muted-foreground first:pl-4"
-                >
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {sortedTasks.length === 0 ? (
-              <tr>
-                <td colSpan={6} className="px-4 py-6 text-center text-xs text-muted-foreground">
-                  暂无任务
-                </td>
+        {/* 窄屏表格必须自带横向滚动:否则被 Card 的 overflow-hidden 裁掉，右列完全看不到 */}
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-xs">
+            <thead>
+              <tr className="border-b">
+                {["任务", "状态", "引擎", "目标进度", "在途", "最近活动"].map((h) => (
+                  <th
+                    key={h}
+                    className="px-4 py-2 text-left text-[9px] font-semibold uppercase tracking-widest text-muted-foreground first:pl-4"
+                  >
+                    {h}
+                  </th>
+                ))}
               </tr>
-            ) : (
-              sortedTasks.map((t) => {
-                const goalsPct = t.goals_total ? Math.round(((t.goals_met ?? 0) / t.goals_total) * 100) : null;
-                return (
-                  <tr key={t.id} className="border-b last:border-0 transition-colors hover:bg-muted/30">
-                    <td className="max-w-xs px-4 py-3">
-                      <Link href={`/function/tasks/detail?id=${t.id}`} className="group flex flex-col">
-                        <span className="truncate font-medium group-hover:underline">{t.description}</span>
-                        <span className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{t.id}</span>
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge domain="task" value={t.status} dot className="px-1.5 py-0 text-[10px]" />
-                    </td>
-                    <td className="px-4 py-3">
-                      <StatusBadge
-                        domain="engine"
-                        value={t.engine_mode ?? "idle"}
-                        className="px-1.5 py-0 text-[10px]"
-                      />
-                    </td>
-                    <td className="px-4 py-3">
-                      {goalsPct !== null ? (
-                        <div className="flex items-center gap-2">
-                          <Progress value={goalsPct} className="h-1 w-14" />
-                          <span className="tabular-nums text-muted-foreground">
-                            {t.goals_met ?? 0}/{t.goals_total}
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 tabular-nums">
-                      {(t.in_flight ?? 0) > 0 ? (
-                        <span className="font-semibold">{t.in_flight}</span>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                      {fmtRel(t.last_activity_unix ?? t.created_unix)}
-                    </td>
-                  </tr>
-                );
-              })
-            )}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {sortedTasks.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-6 text-center text-xs text-muted-foreground">
+                    暂无任务
+                  </td>
+                </tr>
+              ) : (
+                sortedTasks.map((t) => {
+                  const goalsPct = t.goals_total ? Math.round(((t.goals_met ?? 0) / t.goals_total) * 100) : null;
+                  return (
+                    <tr key={t.id} className="border-b last:border-0 transition-colors hover:bg-muted/30">
+                      <td className="max-w-xs px-4 py-3">
+                        <Link href={`/function/tasks/detail?id=${t.id}`} className="group flex flex-col">
+                          <span className="truncate font-medium group-hover:underline">{t.description}</span>
+                          <span className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{t.id}</span>
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusBadge domain="task" value={t.status} dot className="px-1.5 py-0 text-[10px]" />
+                      </td>
+                      <td className="px-4 py-3">
+                        <StatusBadge
+                          domain="engine"
+                          value={t.engine_mode ?? "idle"}
+                          className="px-1.5 py-0 text-[10px]"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        {goalsPct !== null ? (
+                          <div className="flex items-center gap-2">
+                            <Progress value={goalsPct} className="h-1 w-14" />
+                            <span className="tabular-nums text-muted-foreground">
+                              {t.goals_met ?? 0}/{t.goals_total}
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 tabular-nums">
+                        {(t.in_flight ?? 0) > 0 ? (
+                          <span className="font-semibold">{t.in_flight}</span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                        {fmtRel(t.last_activity_unix ?? t.created_unix)}
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
       </Card>
 
       {/* ── Row 5: 资产分布 | 流量状态码 | 拦截 & 待审批 ── */}

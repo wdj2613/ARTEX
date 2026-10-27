@@ -69,7 +69,7 @@ export function TrafficEvidenceViewer({
         if (!open) onClose();
       }}
     >
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>流量证据 #{bindingId}</DialogTitle>
           <DialogDescription className="break-all">
@@ -150,7 +150,7 @@ export function CapturedTrafficViewer({ id, onClose }: { id: string | null; onCl
         if (!open) onClose();
       }}
     >
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-4xl">
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
           <DialogTitle>预览流量</DialogTitle>
           <DialogDescription>流量 ID：{id}。绑定时会保存完整正文。</DialogDescription>

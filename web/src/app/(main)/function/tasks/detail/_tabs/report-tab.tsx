@@ -57,7 +57,7 @@ export function ReportTab({ taskId }: { taskId: string }) {
     );
   } else if (report) {
     content = (
-      <div className="max-h-[60vh] overflow-auto rounded-md border bg-muted/20 p-4">
+      <div className="max-h-[60dvh] overflow-auto rounded-md border bg-muted/20 p-4">
         <Markdown text={report} />
       </div>
     );

@@ -199,7 +199,7 @@ export default function CommandsPage() {
       </div>
 
       {/* History table */}
-      <div className="flex h-[calc(100vh-13rem)] min-h-0 flex-col">
+      <div className="flex h-[calc(100dvh-13rem)] min-h-0 flex-col">
         <Card className="flex min-h-0 flex-1 flex-col overflow-hidden py-0">
           <div className="min-h-0 flex-1 overflow-auto">
             <Table>
@@ -302,7 +302,7 @@ export default function CommandsPage() {
           ) : stats.length === 0 ? (
             <div className="py-10 text-center text-sm text-muted-foreground">暂无统计数据</div>
           ) : (
-            <div className="-mr-2 max-h-[55vh] space-y-1 overflow-auto pr-2">
+            <div className="-mr-2 max-h-[55dvh] space-y-1 overflow-auto pr-2">
               {stats.map((s) => (
                 <div key={s.tool} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md p-2">
                   <div className="min-w-0">

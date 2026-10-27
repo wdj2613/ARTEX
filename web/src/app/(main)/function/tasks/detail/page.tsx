@@ -161,7 +161,13 @@ function TaskLLMControl({ task, profiles, onUpdated }: { task: Task; profiles: L
           {backupCount > 0 && <span className="hidden text-muted-foreground xl:inline">+{backupCount}</span>}
         </Button>
       </PopoverTrigger>
-      <PopoverContent ref={popoverContentRef} align="start" className="w-[min(28rem,calc(100vw-2rem))] gap-4 p-4">
+      {/* 弹层高度必须受视口约束:窄屏/横屏时内容会超过屏幕，而 Popover 本身不滚动，
+          「当前配置」下拉会被夹在屏幕外点不到。max-h + 内部滚动解决。 */}
+      <PopoverContent
+        ref={popoverContentRef}
+        align="start"
+        className="max-h-[min(85dvh,34rem)] w-[min(28rem,calc(100vw-2rem))] gap-4 overflow-y-auto overscroll-contain p-4"
+      >
         <PopoverHeader>
           <PopoverTitle>任务 LLM 配置链</PopoverTitle>
           <PopoverDescription>{editorDescription}</PopoverDescription>
@@ -188,7 +194,7 @@ function TaskLLMControl({ task, profiles, onUpdated }: { task: Task; profiles: L
           portalContainer={popoverContentRef}
         />
 
-        <div className="flex justify-end gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           <Button type="button" variant="outline" size="sm" onClick={() => setOpen(false)}>
             关闭
           </Button>

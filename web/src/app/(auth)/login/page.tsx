@@ -166,7 +166,7 @@ export default function LoginPage() {
           <div
             ref={termsBodyRef}
             onScroll={handleTermsScroll}
-            className="max-h-[60vh] space-y-5 overflow-y-auto px-6 py-5 text-sm leading-relaxed text-muted-foreground"
+            className="max-h-[60dvh] space-y-5 overflow-y-auto px-6 py-5 text-sm leading-relaxed text-muted-foreground"
           >
             <p className="rounded-lg border bg-muted/40 p-3 text-foreground/80">
               本《使用须知与免责声明》（以下简称"本声明"）是您与 ARTEX
