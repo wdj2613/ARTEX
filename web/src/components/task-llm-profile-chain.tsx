@@ -138,7 +138,7 @@ export function TaskLLMProfileChain({
       {value.length === 0 ? (
         <p className="text-muted-foreground text-xs">未指定配置时，任务跟随 Agent 或全局激活配置。</p>
       ) : (
-        <div className="flex flex-col divide-y rounded-lg border">
+        <div className="flex max-h-64 flex-col divide-y overflow-y-auto overscroll-contain rounded-lg border">
           {value.map((id, index) => {
             const profile = profilesByID.get(id);
             return (
