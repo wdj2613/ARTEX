@@ -2327,7 +2327,7 @@ function BulkDeleteTasksDialog({
           <Trash2Icon className="text-destructive" /> 删除所选 {ids.length}
         </Button>
       </AlertDialogTrigger>
-      <AlertDialogContent className="max-h-[85vh] overflow-y-auto">
+      <AlertDialogContent className="max-h-[85dvh] overflow-y-auto">
         <AlertDialogHeader>
           <AlertDialogTitle>确认删除所选 {ids.length} 个任务？</AlertDialogTitle>
           <AlertDialogDescription>

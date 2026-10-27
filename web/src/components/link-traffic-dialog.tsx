@@ -82,7 +82,7 @@ export function LinkTrafficDialog({
         if (!open && !busy) onClose();
       }}
     >
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+      <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>关联到漏洞</DialogTitle>
           <DialogDescription>将所选 {trafficIds.length} 条流量保存为已有漏洞的证据。</DialogDescription>
@@ -106,7 +106,7 @@ export function LinkTrafficDialog({
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         ) : null}
-        <div className="flex max-h-[40vh] flex-col gap-2 overflow-auto" aria-busy={loading}>
+        <div className="flex max-h-[40dvh] flex-col gap-2 overflow-auto" aria-busy={loading}>
           {(data?.items ?? []).map((f) => (
             <Button
               key={f.finding_id ?? f.id}

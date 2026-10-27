@@ -398,7 +398,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
                   <DialogTitle>渲染预览</DialogTitle>
                   <DialogDescription>所有 {`{{.Var}}`} 已由后端用示例值替换。</DialogDescription>
                 </DialogHeader>
-                <div className="max-h-[60vh] overflow-auto rounded-md border bg-muted/30 p-3">
+                <div className="max-h-[60dvh] overflow-auto rounded-md border bg-muted/30 p-3">
                   <Markdown text={preview} />
                 </div>
               </DialogContent>
@@ -461,7 +461,7 @@ export function AgentEditor({ agentKey, onSaved }: { agentKey: string; onSaved?:
                   )}
                 </DialogDescription>
               </DialogHeader>
-              <pre className="bg-muted max-h-[55vh] overflow-auto whitespace-pre-wrap rounded-md p-3 font-mono text-xs">
+              <pre className="bg-muted max-h-[55dvh] overflow-auto whitespace-pre-wrap rounded-md p-3 font-mono text-xs">
                 {viewVer?.template_text || "（空）"}
               </pre>
               <div className="flex gap-2 justify-end">
@@ -708,7 +708,7 @@ function computeDiff(oldText: string, newText: string): DiffLine[] {
 function DiffView({ oldText, newText }: { oldText: string; newText: string }) {
   const lines = React.useMemo(() => computeDiff(oldText, newText), [oldText, newText]);
   return (
-    <pre className="max-h-[60vh] overflow-auto rounded-md border bg-muted/30 p-2 font-mono text-xs leading-5">
+    <pre className="max-h-[60dvh] overflow-auto rounded-md border bg-muted/30 p-2 font-mono text-xs leading-5">
       {lines.map((l, idx) => (
         <div
           key={idx}

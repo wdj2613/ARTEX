@@ -110,7 +110,7 @@ export function TrafficPickerDialog({
           if (!open && !busy) onClose();
         }}
       >
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-5xl">
+        <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-5xl">
           <DialogHeader>
             <DialogTitle>绑定流量</DialogTitle>
             <DialogDescription>
@@ -172,7 +172,7 @@ export function TrafficPickerDialog({
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           ) : null}
-          <div className="max-h-[45vh] overflow-auto rounded-md border" aria-busy={loading}>
+          <div className="max-h-[45dvh] overflow-auto rounded-md border" aria-busy={loading}>
             <Table>
               <TableHeader>
                 <TableRow>

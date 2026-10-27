@@ -44,7 +44,7 @@ export function FindingLineageView({ findingId }: { findingId: string }) {
     <ExplorationGraph
       nodes={nodes}
       edges={edges}
-      className="h-[68vh]"
+      className="h-[68dvh]"
       emptyHint={loaded ? "无链路" : "加载中…"}
     />
   );

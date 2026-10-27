@@ -48,7 +48,7 @@ export function GraphTab({ taskId }: { taskId: string }) {
   return (
     <Card>
       <CardContent className="p-0">
-        <ExplorationGraph nodes={nodes} edges={edges} className="h-[72vh]" />
+        <ExplorationGraph nodes={nodes} edges={edges} className="h-[72dvh]" />
       </CardContent>
     </Card>
   );
