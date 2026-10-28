@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [0.3.20] - 2026-10-28
+
+### 工具链
+
+#### 新增的功能
+
+- **镜像内置渗透工具链**：apt 层补充 `sqlmap` `whatweb` `hydra` `sshpass` `masscan` `dirb` `gobuster` `ffuf` `wapiti`（bookworm 源直接可装，多架构 CI 不受影响），另按架构下载 `nuclei`（v3.11.1）与 `subfinder`（v2.17.0）官方二进制。此前容器里只有 nmap/curl/python，agent 把目录爆破、口令爆破、指纹识别全部手搓成 curl 循环（线上 48h 实测：手写 curl 1,802 次、`which`/找字典试探 65 次、运行时 pip install 25 次）。
+- **Python 依赖基线**：把 agent 反复在运行时安装的 `requests` `PySocks` `python-socks` `paramiko` `mmh3` `pyjwt` `bcrypt` `PyNaCl` `websocket-client` 打进镜像（运行时安装落在容器可写层，每次换镜像全丢）。本地构建可 `--build-arg PIP_INDEX_URL=...` 指定镜像源。
+- **字典与 nuclei 模板走挂载不进镜像**：`wordlists/`（common / dir-medium / subdomains-5000 / usernames / passwords-top10k）与 nuclei 模板由 `scripts/fetch-wordlists.sh` 下载到宿主机，compose 只读挂载到 `/opt/artex/wordlists` 与 `/root/.local/share/nuclei-templates`；镜像体积不被字典撑大。生产 compose 同步加了两个挂载。
+- **工具箱使用规约进入提示词（worker + mainagent）**：代码-owned 段 [F]，改 DB 提示词也丢不掉——按场景选工具（ffuf/httpx/sqlmap/hydra/subfinder/…）、字典固定路径、自装工具后必须 `create_custom_tool` 注册、`command -v` 只确认一次。配套新增 `pentest-toolbox` 技能（工具清单 + 标准命令模板 + 纪律），`TestToolboxSpecSurvivesOverride` 锁定该段在 DB 覆盖下依然存在。
+
 ## [0.3.19] - 2026-10-26
 
 ### 移动端适配

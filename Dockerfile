@@ -12,14 +12,32 @@
 #   docker build -t artex:local .
 FROM python:3.12-slim-bookworm
 ARG TARGETARCH
-# 常用工具：ripgrep / curl / vim，加一批 recon 常备件（按需增删）。
+# 出网代理（可选）：本地构建若访问 GitHub/PyPI 受限，传 --build-arg HTTPS_PROXY=http://<host>:7890。
+# 空值等于不走代理；CI（GitHub Actions 云端）不传也能直连。
+ARG HTTPS_PROXY
+ARG PIP_INDEX_URL=https://pypi.org/simple
+# 常用工具 + recon 常备件 + 渗透工具（bookworm 源直接有）：
+#   sqlmap / whatweb / hydra / sshpass / masscan / dirb / gobuster / ffuf / wapiti + 既有 nmap。
+# 字典不打进镜像（1.5GB 级），由 compose 只读挂载 /opt/artex/wordlists。
 # Node 从 NodeSource 装 20.x：bookworm 自带的 apt nodejs 是 18，Playwright 要求 >=20。
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates ripgrep curl wget vim git jq unzip \
       dnsutils iputils-ping netcat-openbsd inetutils-telnet whois nmap \
+      sqlmap whatweb hydra sshpass masscan dirb gobuster ffuf wapiti \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
+# nuclei / subfinder：bookworm 没有，用 projectdiscovery 官方 release 按架构下载。
+# （nuclei 模板不随镜像发布，由 compose 挂载到 /root/.local/share/nuclei-templates。）
+RUN if [ "$TARGETARCH" = "arm64" ]; then ARCH=arm64; else ARCH=amd64; fi; \
+    [ -n "$HTTPS_PROXY" ] && P="--proxy $HTTPS_PROXY" || P=""; \
+    curl -fsSL --retry 2 $P -o /tmp/nuclei.zip \
+      "https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_linux_${ARCH}.zip" \
+    && unzip -o -q /tmp/nuclei.zip -d /usr/local/bin && rm /tmp/nuclei.zip \
+    && curl -fsSL --retry 2 $P -o /tmp/subfinder.zip \
+      "https://github.com/projectdiscovery/subfinder/releases/download/v2.17.0/subfinder_2.17.0_linux_${ARCH}.zip" \
+    && unzip -o -q /tmp/subfinder.zip -d /usr/local/bin && rm /tmp/subfinder.zip \
+    && nuclei -version 2>&1 | head -1 && subfinder -version 2>&1 | head -1
 # 预装 Playwright MCP 与 CLI（全局），运行时不再 npx 联网下载。
 # @playwright/mcp：browser MCP 直接 `npx @playwright/mcp`（已全局装好，无需 -y/@latest）。
 # @playwright/cli：提供 playwright-cli，装完顺带 --help 验证可执行。
@@ -29,6 +47,11 @@ RUN npm install -g @playwright/mcp@latest @playwright/cli@latest playwright@late
     && playwright-cli --help \
     && playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
+# Python 依赖基线：agent 在任务里反复 pip install 的库（线上 48h 实测 25 次运行时安装，
+# 落在容器可写层、换镜像全丢），打进镜像省掉每次重复安装与出网依赖。
+RUN pip3 install --no-cache-dir -i "$PIP_INDEX_URL" \
+      requests PySocks python-socks paramiko mmh3 pyjwt bcrypt PyNaCl websocket-client \
+    && rm -rf /root/.cache/pip
 WORKDIR /app
 # 预编译好的对应架构二进制（dist/amd64/artex 或 dist/arm64/artex）
 COPY dist/${TARGETARCH}/artex /app/artex
