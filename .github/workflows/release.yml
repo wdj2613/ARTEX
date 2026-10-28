@@ -33,8 +33,10 @@ jobs:
             echo "正式版本必须是 v主版本.次版本.修订号，例如 v0.3.15" >&2
             exit 1
           fi
-          if [[ ! "$ARTEX_DOCKER_IMAGE" =~ ^[a-z0-9][a-z0-9_-]*/[a-z0-9]+([._-][a-z0-9]+)*$ ]]; then
-            echo "请先配置 Actions 变量 ARTEX_DOCKER_IMAGE，格式为 Docker Hub 用户名/镜像名" >&2
+          # 允许可选的 registry 前缀：ghcr.io/<owner>/<image> 与 Docker Hub 的 <owner>/<image> 都合法。
+          # GHCR 要求全小写，因此这里同时兜住大写导致的推送失败。
+          if [[ ! "$ARTEX_DOCKER_IMAGE" =~ ^([a-z0-9][a-z0-9.-]*/)?[a-z0-9][a-z0-9_-]*/[a-z0-9]+([._-][a-z0-9]+)*$ ]]; then
+            echo "镜像名不合法：$ARTEX_DOCKER_IMAGE（期望 [registry/]owner/image，全小写）" >&2
             exit 1
           fi
           echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"

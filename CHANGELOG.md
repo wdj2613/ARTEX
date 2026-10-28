@@ -17,6 +17,8 @@
 
 - **12 个冲突文件人工解决**：`release.yml` 采用上游更完善的流程但推送目标保持 GHCR（`ghcr.io/<owner>/artex`，`packages: write`），并删掉依赖 Vercel 的 demo job；`selfupdate` 的 `Repo` 保持 `wdj2613/ARTEX`（否则自更新会装成别人的版本）；`README` 按项目约定保持原样；`Dockerfile` 保留工具链并采纳 Node 22；`db/schema.sql` 以上游全文为基线补回我们的 `knowledge_queries`（此前拼接截断导致 `syntax error at or near "CREATE"`）；`server/server.go` 与 `server/assembly.go` 合并双方设置项；web 三处保留我们的 `dvh`/响应式列并采纳上游新功能。
 - **确认无新增测试失败**：`agent` 包 `TestGraphOverviewExpandsAssociatedCompanyScope`、`TestCaptureApprovalLifecycle` 与 `db` 包 `TestInterceptApprovalFilters`、`TestSideTaskArchiveVersions` 在合并前/RuoJi6 原仓库同样失败，属上游既有问题；其余 12 个包全绿（`server` 包 109s 全过）。
+- **修复 release 流程的镜像名校验**：上游 `prepare` 步骤的正则只接受 Docker Hub 的 `<owner>/<image>` 形式，改成 GHCR 后 `ghcr.io/<owner>/artex` 带两级斜杠会被判为非法，导致 `Validate release version` 失败、整条发布流水线中止（v0.4.0 首次推送即命中）。正则改为允许可选 registry 前缀，并明确要求全小写（GHCR 硬性要求）。
+
 
 ## [0.3.23] - 2026-10-28
 
