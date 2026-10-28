@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"path/filepath"
@@ -220,6 +221,17 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 	agent.KnowledgeSearchEnabled = func() bool { return pg.GetBool(settingAgentKnowledgeSearch, true) }
 	agent.KnowledgeQueryBudget = func() int {
 		return knowledgeQueryBudgetOf(func() (string, bool, error) { return pg.GetSetting(settingAgentKnowledgeQueryBudget) })
+	}
+	agent.IntelligenceEnabled = func() bool { return pg.GetBool(db.SettingTaskIntelligence, false) }
+	agent.IntelligenceRecord = func(ctx context.Context, taskID, nodeID int64, worker string, input db.IntelligenceInput) (int64, error) {
+		if !pg.GetBool(db.SettingTaskIntelligence, false) {
+			return 0, fmt.Errorf("任务情报自动记录已关闭")
+		}
+		item, err := pg.RecordIntelligence(ctx, taskID, nodeID, worker, input)
+		if err != nil {
+			return 0, err
+		}
+		return item.ID, nil
 	}
 	// Seed the built-in domain tools (first-insert only; DO NOTHING preserves edits).
 	// No startup prune: rows we didn't seed are left alone so future user-defined

@@ -63,7 +63,7 @@ func (s *Server) hostTools() ([]actool.CoreTool, map[string][]string) {
 // orchestrationTools returns the cross-task tool set. Bound per-agent via the
 // tools table (default: no binding — opt-in for orchestration agents).
 func (s *Server) orchestrationTools() []actool.CoreTool {
-	return []actool.CoreTool{
+	return append([]actool.CoreTool{
 		s.toolListTasks(),
 		s.toolListLLMProfiles(),
 		s.toolSpawnTask(),
@@ -78,7 +78,7 @@ func (s *Server) orchestrationTools() []actool.CoreTool {
 		s.toolUpdateFindingReport(),
 		s.toolGetFindingTraffic(),
 		s.toolBindFindingTraffic(),
-	}
+	}, s.findingCaseTools()...)
 }
 
 // --- schema helpers ---
@@ -175,10 +175,9 @@ func (s *Server) delegateToTask(ctx context.Context, in json.RawMessage, pick fu
 
 func (s *Server) toolListTasks() actool.CoreTool {
 	return roTool("list_tasks",
-		"列出所有任务(id/描述/目标/状态/运行时长/父任务/LLM 配置)，编排 agent 用它掌握全局、看哪些任务卡太久、各自用哪个 LLM。运行时长：运行中=创建→现在，终态=创建→最后活动(秒)。llm_profile：任务 planner/worker 用的配置名，(激活配置)=跟随全局激活。",
+		"列出所有任务(id/描述/目标/状态/运行时长/父任务/LLM 配置)，编排 agent 用它掌握全局、看哪些任务卡太久、各自用哪个 LLM。运行时长只累计实际执行时间，暂停、排队和终态后的时间不计入。llm_profile：任务 planner/worker 用的配置名，(激活配置)=跟随全局激活。",
 		objSchema(map[string]any{}),
 		func(context.Context, json.RawMessage) (actool.Result, error) {
-			lastAct, _ := s.m.PG().LastActivityAll()
 			// id -> name to resolve each task's pinned LLM profile.
 			profName := map[int64]string{}
 			if profs, err := s.m.pg.ListProfiles(); err == nil {
@@ -189,16 +188,8 @@ func (s *Server) toolListTasks() actool.CoreTool {
 			out := make([]map[string]any, 0)
 			for _, t := range s.m.List() {
 				status := s.deriveTaskStatus(t)
-				end := lastAct[t.ExpID]
-				if live := s.engine.LastActivity(t.ID); live > end {
-					end = live
-				}
-				dur := int64(0)
-				if status == "running" {
-					dur = time.Now().Unix() - t.CreatedAt
-				} else if end > t.CreatedAt {
-					dur = end - t.CreatedAt
-				}
+				lifecycle := t.lifecycleSnapshot()
+				dur := taskRunSeconds(lifecycle.ActiveRunSeconds, lifecycle.RunSegmentStartedAt, time.Now().Unix(), status, lifecycle.Paused, lifecycle.Queued)
 				row := map[string]any{"id": t.ID, "description": t.Description, "goal": t.Goal, "status": status, "run_seconds": dur}
 				if t.ParentRef != "" {
 					row["parent_ref"] = t.ParentRef
@@ -251,7 +242,7 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			"plan_heartbeat_seconds": map[string]any{"type": "integer", "description": "可选：planner 心跳触发间隔(秒)。距上轮规划结束/任务开始满该值且期间无触发 → 触发一轮规划(兜底死锁 + 唤醒去监督飞行中的 worker)。留空或 0 = 默认 600(10min)；"},
 			"seed_first_intent":      map[string]any{"type": "boolean", "description": "可选：对于简单任务可开启，创建时直接下发一条种子意图(内容=描述+目标)让 worker 免等首轮 planner 直接开跑测试；默认 false(走标准先规划再执行)。"},
 		}, "description", "goal"),
-		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
 				Description          string          `json:"description"`
 				Goal                 string          `json:"goal"`
@@ -305,7 +296,40 @@ func (s *Server) toolSpawnTask() actool.CoreTool {
 			if pin != nil {
 				llmIDs = []int64{*pin}
 			}
+			name := ""
+			autoTitleEnabled := s.m.pg.GetBool(db.SettingTaskAutoTitle, false)
+			if autoTitleEnabled {
+				if err := ctx.Err(); err != nil {
+					return actool.Errorf(err.Error()), nil
+				}
+				active, activeErr := s.m.pg.ActiveProfile()
+				if activeErr != nil {
+					log.Printf("[auto-title] active profile lookup failed: %v", activeErr)
+				} else if active == nil {
+					log.Printf("[auto-title] no active profile")
+				} else if prov, _, providerOK := s.providerForProfile(active.ID); providerOK {
+					titleCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+					defer cancel()
+					generated, titleErr := agent.GenerateAutoTitle(titleCtx, prov, a.Description+"\n"+a.Goal)
+					if err := ctx.Err(); err != nil {
+						return actool.Errorf(err.Error()), nil
+					}
+					if titleErr == nil {
+						name = generated
+					} else {
+						log.Printf("[auto-title] task title generation failed: %v", titleErr)
+					}
+				} else {
+					log.Printf("[auto-title] task provider unavailable for active profile %d", active.ID)
+				}
+			}
+			if autoTitleEnabled {
+				if err := ctx.Err(); err != nil {
+					return actool.Errorf(err.Error()), nil
+				}
+			}
 			t, err := s.m.CreateTaskWithOptions(a.Description, a.Goal, db.TaskCreateOptions{
+				Name:                 name,
 				SourceTaskIDs:        sourceIDs,
 				LLMProfileIDs:        llmIDs,
 				TimeoutSeconds:       a.TimeoutSeconds,
@@ -442,6 +466,15 @@ func (s *Server) toolUpdateFindingReport() actool.CoreTool {
 			if nodeID <= 0 {
 				return actool.Errorf("finding_id 无效"), nil
 			}
+			fid, err := s.m.pg.FindingIDByNodeID(nodeID)
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			if fid > 0 {
+				if err := s.checkCaseReviewScope(ctx, "update_finding_report", findingCaseRequest{FindingID: json.RawMessage(i64s(fid))}); err != nil {
+					return actool.Errorf(err.Error()), nil
+				}
+			}
 			n, err := s.m.pg.SetFindingReportVersionByNodeID(ctx, nodeID, a.Report, a.EvidenceVersion)
 			if err != nil {
 				return actool.Errorf(err.Error()), nil
@@ -477,7 +510,7 @@ func (s *Server) seedOrchestrationTools() {
 	for _, t := range s.orchestrationTools() {
 		schema, _ := json.Marshal(t.InputSchema())
 		bindings := autoAgents
-		if t.Name() == "bind_finding_traffic" {
+		if t.Name() == "bind_finding_traffic" || strings.Contains(t.Name(), "finding_case") || t.Name() == "search_finding_duplicates" || t.Name() == "get_finding_record" || t.Name() == "merge_finding_records" || t.Name() == "suggest_finding_merge" {
 			bindings = json.RawMessage(`["reporter"]`)
 		}
 		_ = s.m.PG().SeedTool(t.Name(), t.Description(), schema, bindings)
@@ -503,6 +536,7 @@ func (s *Server) seedOrchestrationTools() {
 	s.upgradeReporterTriggerMessage() // 老库补迁移:让 reporter 回传 evidence_version(一次性)
 	s.seedFindingTrafficTools()       // 增加可选证据参数及只读证据工具，保留用户配置
 	s.seedFindingWorkflowTools()
+	s.seedFindingCaseTools()
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
 	// pentest 一起 seed 好了（项目尚无旧库，不做迁移）。
@@ -514,7 +548,7 @@ func (s *Server) seedOrchestrationTools() {
 // reaches an old DB otherwise. Preserves each tool's agent binding + enabled flag.
 // Bump the flag whenever these tools' schemas/descriptions change in code.
 func (s *Server) refreshBuiltinToolSchemas() {
-	const flag = "tool_schema_refresh_v7_list_facts_paging"
+	const flag = "tool_schema_refresh_v8_finding_case_tools"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
 	}

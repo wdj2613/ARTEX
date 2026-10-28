@@ -45,10 +45,13 @@ import {
 import { toast } from "sonner";
 
 import { AssetInterceptRulesEditor } from "@/components/asset-intercept-rules-editor";
+import { DateSelect } from "@/components/date-select";
+import { RemarkEditor } from "@/components/remark-editor";
 import { StatusBadge } from "@/components/status-badge";
 import { TablePagination } from "@/components/table-pagination";
 import { TaskLLMProfileChain } from "@/components/task-llm-profile-chain";
 import { TaskTemplateControls } from "@/components/task-template-controls";
+import { TimeSelect } from "@/components/time-select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -118,7 +121,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { api } from "@/lib/api";
+import { api, type ScheduleInput } from "@/lib/api";
 import { getLocalStorageValue, setLocalStorageValue } from "@/lib/local-storage.client";
 import { type SortDirection, useStoredSortPreference } from "@/lib/sort-preference";
 import type {
@@ -134,6 +137,7 @@ import type {
   TaskCategory,
   TaskStatus,
 } from "@/lib/types";
+import { MAX_TASK_REMARK_RUNES, MAX_TASK_WORKER_COUNT, parseWorkerCountInput } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 // fmtBytes renders a human file size for the upload manifest.
@@ -184,19 +188,15 @@ function fmtDuration(sec: number): string {
   return `${s}s`;
 }
 
-// taskDuration is the task's run duration in seconds: created → now while running,
-// created → completion for a finished task, else created → last activity. 0 when it
-// never ran (no activity yet).
+// taskDuration counts only active execution segments. A live segment ticks locally;
+// paused, queued, and terminal tasks stay fixed at their persisted active total.
 function taskDuration(task: Task, nowSec: number): number {
-  const start = task.created_unix ?? 0;
-  if (!start) return 0;
-  const end =
-    task.status === "running"
-      ? nowSec
-      : task.completed_unix && task.completed_unix > 0
-        ? task.completed_unix
-        : (task.last_activity_unix ?? 0);
-  return end > start ? end - start : 0;
+  const active = Math.max(0, Math.floor(task.active_run_seconds ?? 0));
+  const segmentStart = task.run_segment_started_unix ?? 0;
+  if (task.status === "running" && !task.paused && !task.queued && segmentStart > 0) {
+    return active + Math.max(0, Math.floor(nowSec - segmentStart));
+  }
+  return active;
 }
 
 // deleteDetails takes only the countable part of the result so callers can pass an
@@ -560,6 +560,18 @@ export default function TasksPage() {
         lastRef.current = "";
         load();
       }
+    },
+    [load],
+  );
+
+  const updateTaskRemark = React.useCallback(
+    async (task: Task, remark: string) => {
+      const updated = await api.updateTask(task.id, { remark });
+      setTasks((current) =>
+        current.map((entry) => entry.id === task.id ? { ...entry, remark: updated.remark } : entry),
+      );
+      lastRef.current = "";
+      load();
     },
     [load],
   );
@@ -940,6 +952,7 @@ export default function TasksPage() {
                       onSort={sortTasksBy}
                     />
                     <TableHead>名称</TableHead>
+                    <TableHead className="w-px">备注</TableHead>
                     <TableHead>描述</TableHead>
                     <TableHead>目标</TableHead>
                     <SortableTaskHead
@@ -950,7 +963,7 @@ export default function TasksPage() {
                       onSort={sortTasksBy}
                     />
                     <TableHead className="text-center">目标进度</TableHead>
-                    <TableHead className="text-center" title="严重 / 高 / 中 / 低">
+                    <TableHead className="text-center" title="独立漏洞：严重 / 高 / 中 / 低">
                       漏洞 <span className="text-muted-foreground font-normal">严/高/中/低</span>
                     </TableHead>
                     <TableHead className="text-center">运行中 Worker</TableHead>
@@ -987,6 +1000,7 @@ export default function TasksPage() {
                       onDelete={deleteTask}
                       onControl={controlTask}
                       onRename={renameTask}
+                      onRemark={updateTaskRemark}
                       onTogglePinned={toggleTaskPinned}
                       onArchive={queueTaskArchive}
                       selected={selectedIds.has(task.id)}
@@ -1162,6 +1176,7 @@ const TaskRow = React.memo(function TaskRow({
   onDelete,
   onControl,
   onRename,
+  onRemark,
   onTogglePinned,
   onArchive,
   selected,
@@ -1172,6 +1187,7 @@ const TaskRow = React.memo(function TaskRow({
   onDelete: (id: string, options: DeleteTaskOptions) => Promise<void>;
   onControl: (id: string, action: "pause" | "resume") => Promise<void>;
   onRename: (task: Task, name: string) => Promise<void>;
+  onRemark: (task: Task, remark: string) => Promise<void>;
   onTogglePinned: (task: Task) => Promise<void>;
   onArchive: (task: Task) => Promise<void>;
   selected: boolean;
@@ -1195,6 +1211,9 @@ const TaskRow = React.memo(function TaskRow({
           {task.active && <StarIcon className="size-4 shrink-0 fill-amber-400 text-amber-400" />}
           {taskIsPinned(task) && <PinIcon className="text-primary size-4 shrink-0" aria-label="已置顶" />}
         </div>
+      </TableCell>
+      <TableCell>
+        <RemarkEditor value={task.remark} label={`任务 #${task.id}`} onSave={(remark) => onRemark(task, remark)} />
       </TableCell>
       <TableCell className="text-muted-foreground max-w-40">
         <Link
@@ -1220,14 +1239,17 @@ const TaskRow = React.memo(function TaskRow({
       </TableCell>
       <TableCell className="text-center text-xs tabular-nums">
         {(() => {
-          const f = task.findings;
+          // Keep report severity counts visible while a merged folder awaits its own assessment.
+          const f = task.findings ?? task.distinct_findings;
           const total = f ? f.critical + f.high + f.medium + f.low : 0;
-          if (!f || total === 0) return <span className="text-muted-foreground">0</span>;
-          const seg = (n: number, cls: string) => (
-            <span className={n > 0 ? cls : "text-muted-foreground"}>{n}</span>
-          );
+          if (!f || (total === 0 && !task.distinct_findings?.total))
+            return <span className="text-muted-foreground">0</span>;
+          const seg = (n: number, cls: string) => <span className={n > 0 ? cls : "text-muted-foreground"}>{n}</span>;
           return (
-            <span className="font-medium whitespace-nowrap" title="严重 / 高 / 中 / 低">
+            <span
+              className="font-medium whitespace-nowrap"
+              title={`${task.findings ? "原始上报" : "独立漏洞"}：严重 / 高 / 中 / 低；上报 ${task.distinct_findings?.reports ?? total} 条；待评估 ${task.distinct_findings?.unassessed ?? 0} 个`}
+            >
               {seg(f.critical, "text-rose-600 dark:text-rose-400")}
               <span className="text-muted-foreground">/</span>
               {seg(f.high, "text-red-600 dark:text-red-400")}
@@ -1235,6 +1257,12 @@ const TaskRow = React.memo(function TaskRow({
               {seg(f.medium, "text-amber-600 dark:text-amber-400")}
               <span className="text-muted-foreground">/</span>
               {seg(f.low, "text-slate-600 dark:text-slate-400")}
+              {task.distinct_findings ? (
+                <span className="ml-1 text-muted-foreground">
+                  · {task.distinct_findings.total} 漏洞 / {task.distinct_findings.reports} 上报
+                  {task.distinct_findings.unassessed > 0 ? ` · 待评估 ${task.distinct_findings.unassessed}` : ""}
+                </span>
+              ) : null}
             </span>
           );
         })()}
@@ -3073,6 +3101,7 @@ function CreateTaskSheet({
 }) {
   const [open, setOpen] = React.useState(false);
   const [name, setName] = React.useState("");
+  const [remark, setRemark] = React.useState("");
   const [categoryID, setCategoryID] = React.useState<number | undefined>(undefined);
   const [description, setDescription] = React.useState("");
   const [goal, setGoal] = React.useState("");
@@ -3087,7 +3116,20 @@ function CreateTaskSheet({
   const [heartbeatMin, setHeartbeatMin] = React.useState("10"); // planner 心跳(分钟);默认10,下限10(与后端一致)
   const [seedFirstIntent, setSeedFirstIntent] = React.useState(false); // 创建时下发种子意图,worker 免等首轮 planner 直接开跑;默认关闭,走标准先规划再执行
   const [coverageEnabled, setCoverageEnabled] = React.useState(true); // 资产覆盖度功能;默认开。关闭=不计算/展示覆盖度、不累积范围、隐藏范围类工具(company 关联不受影响)
+  const [workerCount, setWorkerCount] = React.useState(""); // 本任务 Worker 数;空/0=用全局默认
   const [interceptRules, setInterceptRules] = React.useState<AssetInterceptRuleInput[]>([]); // 任务级资产拦截规则(仅本任务生效,不进全局表)
+  const [scheduleEnabled, setScheduleEnabled] = React.useState(false);
+  const [schedule, setSchedule] = React.useState<ScheduleInput>({
+    name: "新建任务计划",
+    schedule_type: "weekly",
+    end_date: "",
+    weekdays: [6, 7],
+    start_time: "18:00",
+    end_time: "",
+    task_ids: [],
+    timezone_mode: "beijing",
+    start_immediately: false,
+  });
   // 方式1 文件上传:建任务前把文件暂存到 drafts/<draftId>/uploads/,拿回绝对路径追加进描述。
   const [uploading, setUploading] = React.useState(false);
   const [uploadCount, setUploadCount] = React.useState(0);
@@ -3138,12 +3180,18 @@ function CreateTaskSheet({
       toast.error(`最多关联 ${MAX_SOURCE_TASKS} 个来源任务`);
       return;
     }
+    const workerCountNum = parseWorkerCountInput(workerCount);
+    if (workerCountNum == null) {
+      toast.error(`Worker 运行数量必须是 0-${MAX_TASK_WORKER_COUNT} 的整数`);
+      return;
+    }
     setCreating(true);
     try {
       const timeoutSec = Math.max(0, Math.floor(Number(timeoutMin) || 0)) * 60;
       const heartbeatSec = Math.max(10, Math.floor(Number(heartbeatMin) || 10)) * 60; // 下限 10min，与后端归一一致
       await api.createTask({
         name: name.trim(),
+        remark: remark.trim(),
         categoryId: categoryID,
         description: description.trim(),
         goal: goal.trim(),
@@ -3154,12 +3202,15 @@ function CreateTaskSheet({
         seedFirstIntent,
         planHeartbeatSeconds: heartbeatSec,
         coverageEnabled,
+        workerCount: workerCountNum,
+        schedule: scheduleEnabled ? { ...schedule, task_ids: [] } : undefined,
         interceptRules: interceptRules
           .map((r) => ({ ...r, pattern: r.pattern.trim() }))
           .filter((r) => r.pattern !== ""),
       });
       toast.success("任务已创建");
       setName("");
+      setRemark("");
       setCategoryID(undefined);
       setDescription("");
       setGoal("");
@@ -3171,7 +3222,20 @@ function CreateTaskSheet({
       setHeartbeatMin("10");
       setSeedFirstIntent(false);
       setCoverageEnabled(true);
+      setWorkerCount("");
       setInterceptRules([]);
+      setScheduleEnabled(false);
+      setSchedule({
+        name: "新建任务计划",
+        schedule_type: "weekly",
+        end_date: "",
+        weekdays: [6, 7],
+        start_time: "18:00",
+        end_time: "",
+        task_ids: [],
+        timezone_mode: "beijing",
+        start_immediately: false,
+      });
       setUploadCount(0);
       draftIdRef.current = "";
       setOpen(false);
@@ -3207,15 +3271,19 @@ function CreateTaskSheet({
             <TaskTemplateControls
               description={description}
               goal={goal}
+              remark={remark}
               categoryID={categoryID}
               interceptRules={interceptRules}
+              workerCount={workerCount}
               selectedTemplateID={selectedTemplateID}
               onSelectedTemplateIDChange={setSelectedTemplateID}
               onApply={(template) => {
                 setDescription(template.description);
                 setGoal(template.goal);
+                setRemark(template.remark ?? "");
                 setCategoryID(template.category_id ?? undefined);
                 setInterceptRules(template.intercept_rules ?? []);
+                setWorkerCount(template.worker_count ? String(template.worker_count) : "");
                 setUploadCount(0);
               }}
               portalContainer={sheetContentRef}
@@ -3229,6 +3297,17 @@ function CreateTaskSheet({
                 onChange={(e) => setName(e.target.value)}
               />
             </div>
+            <div className="grid gap-2">
+              <Label htmlFor="remark">备注（可选）</Label>
+              <Textarea
+                id="remark"
+                className="min-h-20"
+                maxLength={MAX_TASK_REMARK_RUNES}
+                placeholder="补充说明、环境信息等，便于在任务列表识别"
+                value={remark}
+                onChange={(e) => setRemark(e.target.value)}
+              />
+            </div>
             <Field>
               <FieldLabel htmlFor="task-category">任务分类</FieldLabel>
               <CategoryPicker
@@ -3240,6 +3319,122 @@ function CreateTaskSheet({
               />
               <FieldDescription>可选，单个分类；用于任务列表筛选和归档，不影响 Agent 执行。</FieldDescription>
             </Field>
+            <FieldSet>
+              <FieldLegend>计划启动（可选）</FieldLegend>
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox checked={scheduleEnabled} onCheckedChange={(v) => setScheduleEnabled(!!v)} />
+                创建时附加计划，按时间窗口启动和暂停
+              </label>
+              {scheduleEnabled && (
+                <FieldGroup className="rounded-lg border p-3">
+                  <Field>
+                    <FieldLabel>计划名称</FieldLabel>
+                    <Input value={schedule.name} onChange={(e) => setSchedule({ ...schedule, name: e.target.value })} />
+                  </Field>
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field>
+                      <FieldLabel>规则</FieldLabel>
+                      <Select
+                        value={schedule.schedule_type}
+                        onValueChange={(value) =>
+                          setSchedule({ ...schedule, schedule_type: value as ScheduleInput["schedule_type"] })
+                        }
+                      >
+                        <SelectTrigger className="h-10 w-full bg-background">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="weekly">按周</SelectItem>
+                          <SelectItem value="once">指定日期</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                    <Field>
+                      <FieldLabel>时区</FieldLabel>
+                      <Select
+                        value={schedule.timezone_mode}
+                        onValueChange={(value) =>
+                          setSchedule({ ...schedule, timezone_mode: value as ScheduleInput["timezone_mode"] })
+                        }
+                      >
+                        <SelectTrigger className="h-10 w-full bg-background">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="beijing">北京时间</SelectItem>
+                          <SelectItem value="system">系统时区</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </Field>
+                  </div>
+                  {schedule.schedule_type === "once" ? (
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field>
+                        <FieldLabel>开始日期</FieldLabel>
+                        <DateSelect
+                          value={schedule.run_date ?? ""}
+                          onValueChange={(value) => setSchedule({ ...schedule, run_date: value })}
+                          aria-label="开始日期"
+                        />
+                      </Field>
+                      <Field>
+                        <FieldLabel>截止日期（可选）</FieldLabel>
+                        <DateSelect
+                          value={schedule.end_date ?? ""}
+                          onValueChange={(value) => setSchedule({ ...schedule, end_date: value })}
+                          optional
+                          placeholder="不设置截止日期"
+                          aria-label="截止日期，可选"
+                        />
+                      </Field>
+                    </div>
+                  ) : (
+                    <Field>
+                      <FieldLabel>星期（1=周一，7=周日）</FieldLabel>
+                      <Input
+                        value={(schedule.weekdays ?? []).join(",")}
+                        onChange={(e) =>
+                          setSchedule({
+                            ...schedule,
+                            weekdays: e.target.value
+                              .split(",")
+                              .map(Number)
+                              .filter((n) => n >= 1 && n <= 7),
+                          })
+                        }
+                        placeholder="例如 6,7"
+                      />
+                    </Field>
+                  )}
+                  <div className="grid grid-cols-2 gap-3">
+                    <Field>
+                      <FieldLabel>开始时间</FieldLabel>
+                      <TimeSelect
+                        value={schedule.start_time}
+                        onValueChange={(value) => setSchedule({ ...schedule, start_time: value })}
+                        aria-label="开始时间"
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel>结束时间（可选）</FieldLabel>
+                      <TimeSelect
+                        value={schedule.end_time ?? ""}
+                        onValueChange={(value) => setSchedule({ ...schedule, end_time: value })}
+                        optional
+                        aria-label="结束时间，可选"
+                      />
+                    </Field>
+                  </div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={schedule.start_immediately}
+                      onCheckedChange={(v) => setSchedule({ ...schedule, start_immediately: !!v })}
+                    />
+                    创建后立即启动，否则等待第一个计划窗口
+                  </label>
+                </FieldGroup>
+              )}
+            </FieldSet>
             <div className="grid gap-2">
               <Label htmlFor="description">描述</Label>
               <Textarea
@@ -3335,7 +3530,7 @@ function CreateTaskSheet({
               <CollapsibleTrigger className="group flex w-full items-center gap-2 border-t pt-4 text-sm font-medium">
                 <ChevronRightIcon className="text-muted-foreground size-4 transition-transform group-data-[state=open]:rotate-90" />
                 高级设置
-                <span className="text-muted-foreground ml-auto text-xs font-normal">超时 · 心跳 · 首个意图</span>
+                <span className="text-muted-foreground ml-auto text-xs font-normal">超时 · 心跳 · Worker · 首个意图</span>
               </CollapsibleTrigger>
               <CollapsibleContent className="grid gap-5 pt-5">
                 <div className="grid gap-2">
@@ -3367,6 +3562,23 @@ function CreateTaskSheet({
                   <p className="text-muted-foreground text-xs">
                     距上轮规划结束/任务开始满该时长且期间无触发，自动触发一轮规划（兜底卡死 + 唤醒去监督在跑的
                     worker）。下限 10 分钟。
+                  </p>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="worker-count">Worker 运行数量（可选）</Label>
+                  <Input
+                    id="worker-count"
+                    type="number"
+                    min={0}
+                    max={MAX_TASK_WORKER_COUNT}
+                    className="w-40"
+                    placeholder="留空 = 全局默认"
+                    value={workerCount}
+                    onChange={(e) => setWorkerCount(e.target.value)}
+                  />
+                  <p className="text-muted-foreground text-xs">
+                    单独设置本任务并发运行的工作 Agent 数量；留空或 0 = 用全局默认（系统设置里的工作并发，默认
+                    3）。上限 50。
                   </p>
                 </div>
                 <div className="grid gap-2">

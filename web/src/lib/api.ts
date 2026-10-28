@@ -28,15 +28,21 @@ import type {
   ConvTokenSummary,
   CoverageAssetRefs,
   CoverageGraphData,
+  CredentialTrafficDetail,
   DailyTokenBucket,
   DeleteTaskOptions,
   DeleteTaskResult,
   Edge,
+  EgressReport,
   EvidenceBodyPreview,
   ExplorationNodePage,
   ExplorationNodeQuery,
   Finding,
   FindingAssetTree,
+  FindingCaseDetail,
+  FindingCasePage,
+  FindingCaseReviewRun,
+  FindingCaseSuggestion,
   FindingDeepenResponse,
   FindingGroupsPage,
   FindingQuery,
@@ -46,6 +52,9 @@ import type {
   FindingsPage,
   FindingTraffic,
   FindingTrafficDetail,
+  RepeaterSendRequest,
+  RepeaterSendResponse,
+  IntelligencePage,
   IntentAsset,
   InterceptApprovalFilter,
   InterceptApprovalRow,
@@ -87,8 +96,10 @@ import type {
   TaskCategory,
   TaskConstraint,
   TaskGoal,
+  TaskIntelligence,
   TaskLLMResolutions,
   TaskNode,
+  TaskSchedule,
   TaskScopeRow,
   TaskTemplate,
   TokenTotal,
@@ -101,6 +112,7 @@ import type {
   TrafficHost,
   TrafficResp,
   UpdateCheck,
+  UpdateSettings,
   UsageStats,
   WorkspaceFile,
   WorkspaceListing,
@@ -197,6 +209,15 @@ export function sseUrl(path: string): string {
   return token ? `${base}${path}${sep}token=${encodeURIComponent(token)}` : `${base}${path}`;
 }
 
+export function openSSE(path: string): EventSource {
+  const url = sseUrl(path);
+  const target = new URL(url, window.location.href);
+  // Same-origin streams already send cookies. Only opt into cross-port cookies
+  // for the local Next/Go dev pair; keep custom remote SSE endpoints unchanged.
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(target.hostname);
+  return new EventSource(url, { withCredentials: local && target.hostname === window.location.hostname });
+}
+
 const get = <T>(p: string) => http<T>(p);
 const post = <T>(p: string, body?: unknown) =>
   http<T>(p, { method: "POST", body: body ? JSON.stringify(body) : undefined });
@@ -221,6 +242,7 @@ function findingFilterParams(q: Omit<FindingQuery, "page" | "pageSize">): URLSea
   if (q.task && q.task !== "all") p.set("task_id", q.task);
   if (q.query?.trim()) p.set("q", q.query.trim());
   if (q.sort) p.set("sort", q.sort);
+  if (q.timeDirection) p.set("time_direction", q.timeDirection);
   if (q.assetScope) p.set("asset_scope", q.assetScope);
   return p;
 }
@@ -229,7 +251,40 @@ function interceptPageQuery(page: number, size: number, filter: InterceptApprova
   const query = new URLSearchParams({ page: String(page), size: String(size) });
   if (filter.status) query.set("status", filter.status);
   if (filter.decision_source) query.set("decision_source", filter.decision_source);
+  if (filter.q?.trim()) query.set("q", filter.q.trim());
+  if (filter.from) query.set("from", filter.from);
+  if (filter.to) query.set("to", filter.to);
   return query.toString();
+}
+
+export type ScheduleInput = {
+  name: string;
+  enabled?: boolean;
+  timezone_mode?: "beijing" | "system";
+  schedule_type: "once" | "weekly";
+  run_date?: string;
+  end_date?: string;
+  weekdays?: number[];
+  start_time: string;
+  end_time?: string;
+  start_immediately?: boolean;
+  task_ids: number[];
+};
+
+function schedulePayload(input: ScheduleInput) {
+  return {
+    name: input.name,
+    enabled: input.enabled ?? true,
+    timezone_mode: input.timezone_mode ?? "beijing",
+    schedule_type: input.schedule_type,
+    run_date: input.run_date ?? "",
+    end_date: input.end_date ?? "",
+    weekdays: input.weekdays ?? [],
+    start_time: input.start_time,
+    end_time: input.end_time ?? "",
+    start_immediately: input.start_immediately ?? false,
+    task_ids: input.task_ids,
+  };
 }
 
 export const api = {
@@ -249,6 +304,7 @@ export const api = {
   task: (id: string) => get<Task>(`/tasks/${encodeURIComponent(id)}`),
   createTask: (input: {
     name?: string;
+    remark?: string;
     categoryId?: number;
     description: string;
     goal: string;
@@ -259,10 +315,13 @@ export const api = {
     seedFirstIntent?: boolean;
     planHeartbeatSeconds?: number;
     coverageEnabled?: boolean;
+    workerCount?: number;
     interceptRules?: AssetInterceptRuleInput[];
+    schedule?: ScheduleInput;
   }) =>
     post<Task>("/tasks", {
       name: input.name ?? "",
+      remark: input.remark ?? "",
       category_id: input.categoryId ?? null,
       description: input.description,
       goal: input.goal,
@@ -273,10 +332,24 @@ export const api = {
       seed_first_intent: input.seedFirstIntent ?? false,
       plan_heartbeat_seconds: input.planHeartbeatSeconds ?? 0, // 0 = 后端归一到默认 600(10min)
       coverage_enabled: input.coverageEnabled ?? true, // 默认开;false=关闭资产覆盖度功能
+      worker_count: input.workerCount ?? 0, // 0 = 用全局默认 workers
       intercept_rules: input.interceptRules ?? [], // 任务级资产拦截规则
+      schedule: input.schedule ? schedulePayload(input.schedule) : undefined,
     }),
+  schedules: () => get<{ schedules: TaskSchedule[] }>("/schedules").then((r) => arr(r.schedules)),
+  renameSchedule: (id: number, name: string) => patch<TaskSchedule>(`/schedules/${id}/metadata`, { name }),
+  updateScheduleRemark: (id: number, remark: string) => patch<TaskSchedule>(`/schedules/${id}/remark`, { remark }),
+  schedule: (id: number) => get<TaskSchedule>(`/schedules/${id}`),
+  createSchedule: (input: ScheduleInput) => post<TaskSchedule>("/schedules", schedulePayload(input)),
+  updateSchedule: (id: number, input: ScheduleInput) => patch<TaskSchedule>(`/schedules/${id}`, schedulePayload(input)),
+  deleteSchedule: (id: number) => del<{ ok: boolean }>(`/schedules/${id}`),
+  pauseSchedule: (id: number) => post<{ ok: boolean }>(`/schedules/${id}/pause`, {}),
+  resumeSchedule: (id: number) => post<{ ok: boolean }>(`/schedules/${id}/resume`, {}),
+  runScheduleNow: (id: number) =>
+    post<{ ok: boolean; started: number; errors?: string[] }>(`/schedules/${id}/run-now`, {}),
   taskCategories: () => get<{ categories: TaskCategory[] }>("/task-categories").then((r) => arr(r.categories)),
-  updateTask: (id: string, input: { name?: string; pinned?: boolean }) => patch<Task>(`/tasks/${id}`, input),
+  updateTask: (id: string, input: { name?: string; pinned?: boolean; remark?: string }) =>
+    patch<Task>(`/tasks/${id}`, input),
   renameTask: (id: string, name: string) => patch<Task>(`/tasks/${id}`, { name }),
   pinTask: (id: string, pinned: boolean) => patch<Task>(`/tasks/${id}`, { pinned }),
   createTaskCategory: (name: string) => post<TaskCategory>("/task-categories", { name }),
@@ -292,11 +365,11 @@ export const api = {
     }),
   taskTemplates: () => get<{ templates: TaskTemplate[] }>("/task-templates").then((r) => arr(r.templates)),
   createTaskTemplate: (
-    input: Pick<TaskTemplate, "name" | "description" | "goal" | "category_id" | "intercept_rules">,
+    input: Pick<TaskTemplate, "name" | "description" | "goal" | "remark" | "category_id" | "intercept_rules" | "worker_count">,
   ) => post<TaskTemplate>("/task-templates", input),
   updateTaskTemplate: (
     id: number,
-    input: Partial<Pick<TaskTemplate, "name" | "description" | "goal" | "category_id" | "intercept_rules">>,
+    input: Partial<Pick<TaskTemplate, "name" | "description" | "goal" | "remark" | "category_id" | "intercept_rules" | "worker_count">>,
   ) => patch<TaskTemplate>(`/task-templates/${id}`, input),
   deleteTaskTemplate: (id: number) => del<{ deleted: number }>(`/task-templates/${id}`),
   updateTaskLLMProfiles: (id: string, llmProfileIds: number[], activeLLMProfileId?: number) =>
@@ -555,6 +628,46 @@ export const api = {
   // 节点带子树聚合计数。不分页——树是导航结构,一次取完。
   findingAssetTree: (q: Omit<FindingQuery, "page" | "pageSize">) =>
     get<FindingAssetTree>(`/exploration/findings/asset-tree?${findingFilterParams(q).toString()}`),
+
+  findingCases: (q: FindingQuery, originalRows = false) => {
+    const p = findingFilterParams(q);
+    p.set("page", String(q.page));
+    p.set("limit", String(q.pageSize));
+    if (originalRows) p.set("original_rows", "1");
+    return get<FindingCasePage>(`/exploration/finding-cases?${p}`);
+  },
+  getFindingCase: (id: string, contextTask?: string) =>
+    get<FindingCaseDetail>(
+      `/exploration/finding-cases/${id}${contextTask ? `?context_task=${encodeURIComponent(contextTask)}` : ""}`,
+    ),
+  findingCaseMembers: (id: string, page = 1, contextTask?: string, pageSize = 20) =>
+    get<FindingsPage>(
+      `/exploration/finding-cases/${id}/members?page=${page}&limit=${pageSize}${contextTask ? `&context_task=${encodeURIComponent(contextTask)}` : ""}`,
+    ),
+  removeFindingCaseMember: (id: string, fid: string, reason: string) =>
+    http<{ ok: boolean }>(`/exploration/finding-cases/${id}/members/${fid}`, {
+      method: "DELETE",
+      body: JSON.stringify({ reason }),
+    }),
+  findingCaseSuggestions: (task?: string) =>
+    get<FindingCaseSuggestion[]>(
+      `/exploration/finding-case-suggestions${task ? `?task_id=${encodeURIComponent(task)}` : ""}`,
+    ),
+  resolveFindingCaseSuggestion: (id: string, accept: boolean, excludeIds?: string[]) =>
+    post<{ case_id: string }>(`/exploration/finding-case-suggestions/${id}`, {
+      accept,
+      ...(excludeIds && excludeIds.length > 0 ? { exclude_ids: excludeIds } : {}),
+    }),
+  reviewFindingCases: (ids: string[]) =>
+    post<{ runs: { conversation_id: number; task_id: string }[] }>("/exploration/finding-case-review", {
+      finding_ids: ids,
+    }),
+  regenerateFindingCase: (id: string, contextTask?: string) =>
+    post<{ runs: { conversation_id: number; task_id: string }[] }>(
+      `/exploration/finding-case-review${contextTask ? `?context_task=${encodeURIComponent(contextTask)}` : ""}`,
+      { case_id: id },
+    ),
+  findingCaseReviewRuns: () => get<FindingCaseReviewRun[]>("/exploration/finding-case-review"),
   findingStats: () => get<FindingStats>("/exploration/findings/stats"),
   // exportFindings 触发发现页导出并下载文件。scope=selected 时传 ids(finding_id 列表);
   // scope=filtered 时传当前筛选(沿用 FindingQuery 的筛选字段);scope=all 忽略筛选。
@@ -563,8 +676,12 @@ export const api = {
     scope: "filtered" | "all" | "selected";
     filters?: Omit<FindingQuery, "page" | "pageSize">;
     ids?: string[];
+    includeOriginals?: boolean;
+    consolidated?: boolean;
   }) => {
     const p = new URLSearchParams({ format: opts.format, scope: opts.scope });
+    p.set("mode", opts.consolidated === false ? "raw" : "consolidated");
+    p.set("include_originals", String(opts.includeOriginals ?? false));
     if (opts.scope === "selected") {
       p.set("ids", (opts.ids ?? []).join(","));
     } else if (opts.scope === "filtered" && opts.filters) {
@@ -627,6 +744,7 @@ export const api = {
     get<FindingTrafficDetail>(
       `/exploration/findings/${id}/traffic/${bindingId}${contextTask ? `?context_task=${encodeURIComponent(contextTask)}` : ""}`,
     ),
+  repeaterSend: (req: RepeaterSendRequest) => post<RepeaterSendResponse>("/repeater/send", req),
   findingTrafficBody: (
     id: string,
     bindingId: string,
@@ -811,7 +929,22 @@ export const api = {
   trafficDeleteAll: () => del<{ deleted: number; reclaimed: number }>(`/traffic/all`),
 
   // ---- app settings (runtime toggles) ----
+  intelligence: (scope: "tasks" | "assets", id: string, query: URLSearchParams) =>
+    get<IntelligencePage>(`/${scope}/${id}/intelligence?${query.toString()}`),
+  intelligenceDetail: (scope: "tasks" | "assets", id: string, intelligenceId: number) =>
+    get<TaskIntelligence>(`/${scope}/${id}/intelligence/${intelligenceId}`),
+  updateIntelligence: (taskId: number, intelligenceId: number, status: string) =>
+    patch<{ updated: boolean }>(`/tasks/${taskId}/intelligence/${intelligenceId}`, { status }),
+  retryCredentials: (taskId: number, intelligenceId: number) =>
+    post<{ queued: boolean }>(`/tasks/${taskId}/intelligence/${intelligenceId}/credentials/retry`),
+  credentialTraffic: (scope: "tasks" | "assets", scopeId: string, intelligenceId: number, trafficId: string) =>
+    get<CredentialTrafficDetail>(
+      `/${scope}/${scopeId}/intelligence/${intelligenceId}/traffic/${encodeURIComponent(trafficId)}`,
+    ),
   settings: () => get<Settings>(`/settings`),
+  basicAuthSettings: () => get<{ enabled: boolean; username: string; password_set: boolean }>("/settings/basic-auth"),
+  setBasicAuthSettings: (settings: { enabled: boolean; username: string; password: string }) =>
+    put<{ enabled: boolean; username: string; password_set: boolean }>("/settings/basic-auth", settings),
   setSettings: (patch: Partial<Settings>) => put<Settings>(`/settings`, patch),
   // Run a real "test" search with the given (or saved) config to verify it works.
   testWebSearch: (patch: {
@@ -821,12 +954,15 @@ export const api = {
     tavily_search_api_key?: string;
   }) => post<{ ok: boolean; error?: string; count?: number; backend?: string }>(`/settings/web-search/test`, patch),
 
+  // global_proxy 传空 = 测直连；probe_url 可覆盖默认探测地址（隔离网用）。
+  testEgressProxy: (patch: { global_proxy?: string; probe_url?: string }) =>
+    post<EgressReport>(`/settings/proxy/test`, patch),
+
   // ---- 漏洞 IM 推送 ----
   // 渠道是多实例资源（同一类型可配多个机器人、各有过滤规则），因此独立成组，
   // 不塞进扁平的 settings 键值里。
   notifyMeta: () => get<NotificationMeta>(`/notify/meta`),
-  notifyChannels: () =>
-    get<{ channels: NotificationChannel[] }>(`/notify/channels`).then((r) => arr(r.channels)),
+  notifyChannels: () => get<{ channels: NotificationChannel[] }>(`/notify/channels`).then((r) => arr(r.channels)),
   notifyCreateChannel: (payload: {
     name: string;
     kind: string;
@@ -1309,6 +1445,8 @@ export const api = {
   // 后端对 GitHub 的查询结果有 30 分钟缓存（未认证的 GitHub API 是 60 次/小时/IP，
   // 顶栏每次整页加载都会查一次，不缓存会很快耗光配额）。force=true 强制回源，
   // 留给用户显式点「检查更新」时用。
+  getUpdateSettings: () => get<UpdateSettings>("/update/settings"),
+  saveUpdateSettings: (settings: UpdateSettings) => put<UpdateSettings>("/update/settings", settings),
   checkUpdate: (force = false) => get<UpdateCheck>(`/update/check${force ? "?force=1" : ""}`),
   // 202 即返回，实际下载在后台跑，进度走 /api/update/stream。
   applyUpdate: () => post<{ ok: boolean; target: string }>(`/update/apply`),

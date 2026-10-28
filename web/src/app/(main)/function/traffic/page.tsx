@@ -2,6 +2,8 @@
 
 import * as React from "react";
 
+import { useRouter } from "next/navigation";
+
 import {
   ArrowDownWideNarrowIcon,
   ArrowUpNarrowWideIcon,
@@ -19,6 +21,8 @@ import { toast } from "sonner";
 
 import { HttpCodeBlock } from "@/components/http-code-block";
 import { LinkTrafficDialog } from "@/components/link-traffic-dialog";
+import { requestFromTraffic } from "@/components/repeater/repeater-http";
+import { seedFromEvidence } from "@/components/repeater/repeater-store";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -112,7 +116,10 @@ const SORT_STORAGE_KEY = "traffic-sort";
 const STATUS_BUCKETS = ["2xx", "3xx", "4xx", "5xx"];
 
 export default function TrafficPage() {
-  const [selectedFlows, setSelectedFlows] = React.useState<Set<string>>(() => new Set());
+  const [selectedFlows, setSelectedFlows] = React.useState<Map<string, TrafficExchange>>(() => new Map());
+  const router = useRouter();
+  const [importing, setImporting] = React.useState(false);
+  const importLock = React.useRef(false);
   const [linking, setLinking] = React.useState(false);
   const [page, setPage] = React.useState(0);
   const [size, setSize] = React.useState(50);
@@ -321,6 +328,38 @@ export default function TrafficPage() {
       alive = false;
     };
   }, [selected]);
+
+  async function openRepeater(flows: TrafficExchange[]) {
+    if (!flows.length || importLock.current) return;
+    importLock.current = true;
+    setImporting(true);
+    let imported = 0;
+    try {
+      // Sequential loading limits pressure when a whole page is selected. A bad
+      // capture does not discard drafts imported successfully before it.
+      for (const flow of flows) {
+        try {
+          const raw = await api.trafficExchange(flow.id);
+          seedFromEvidence(
+            requestFromTraffic(raw.req, flow),
+            { label: `流量 ${flow.id}` },
+            { title: `${flow.method} ${flow.host}` },
+          );
+          imported += 1;
+        } catch (error) {
+          toast.error(`${flow.host}：${(error as Error).message}`);
+        }
+      }
+      if (imported) {
+        toast.success(`已送入 ${imported} 条请求，可编辑后发送`);
+        setSelected(null);
+        router.push("/function/repeater");
+      }
+    } finally {
+      importLock.current = false;
+      setImporting(false);
+    }
+  }
 
   // Toggle direction when re-clicking the active column, else sort the new column
   // newest/largest-first.
@@ -607,8 +646,16 @@ export default function TrafficPage() {
         <Button variant="outline" size="sm" disabled={selectedFlows.size === 0} onClick={() => setLinking(true)}>
           关联到漏洞
         </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={selectedFlows.size === 0 || importing}
+          onClick={() => void openRepeater([...selectedFlows.values()])}
+        >
+          {importing ? "转入中…" : "送入请求重发"}
+        </Button>
         {selectedFlows.size > 0 ? (
-          <Button variant="ghost" size="sm" onClick={() => setSelectedFlows(new Set())}>
+          <Button variant="ghost" size="sm" onClick={() => setSelectedFlows(new Map())}>
             清空选择
           </Button>
         ) : null}
@@ -626,9 +673,9 @@ export default function TrafficPage() {
                       checked={exchanges.length > 0 && exchanges.every((e) => selectedFlows.has(e.id))}
                       onCheckedChange={(checked) =>
                         setSelectedFlows((previous) => {
-                          const next = new Set(previous);
+                          const next = new Map(previous);
                           for (const e of exchanges) {
-                            if (checked === true) next.add(e.id);
+                            if (checked === true) next.set(e.id, e);
                             else next.delete(e.id);
                           }
                           return next;
@@ -681,8 +728,8 @@ export default function TrafficPage() {
                         onClick={(event) => event.stopPropagation()}
                         onCheckedChange={(checked) =>
                           setSelectedFlows((previous) => {
-                            const next = new Set(previous);
-                            if (checked === true) next.add(e.id);
+                            const next = new Map(previous);
+                            if (checked === true) next.set(e.id, e);
                             else next.delete(e.id);
                             return next;
                           })
@@ -721,9 +768,9 @@ export default function TrafficPage() {
 
       {linking ? (
         <LinkTrafficDialog
-          trafficIds={[...selectedFlows]}
+          trafficIds={[...selectedFlows.keys()]}
           onClose={() => setLinking(false)}
-          onBound={() => setSelectedFlows(new Set())}
+          onBound={() => setSelectedFlows(new Map())}
         />
       ) : null}
       <Sheet open={selected !== null} onOpenChange={(open) => !open && setSelected(null)}>
@@ -740,6 +787,15 @@ export default function TrafficPage() {
                 </div>
                 <SheetTitle className="break-all font-mono">{selected.host}</SheetTitle>
                 <SheetDescription className="break-all font-mono">{selected.url}</SheetDescription>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-2 w-fit"
+                  disabled={importing}
+                  onClick={() => void openRepeater([selected])}
+                >
+                  {importing ? "转入中…" : "送入请求重发"}
+                </Button>
               </SheetHeader>
               <Tabs defaultValue="request" className="min-h-0 flex-1 gap-0">
                 <TabsList className="mx-5 mt-4 grid w-auto grid-cols-2">

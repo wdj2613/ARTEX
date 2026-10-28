@@ -15,7 +15,7 @@ services:
     restart: unless-stopped
 
   artex:
-    image: tomicdd/artex:${ARTEX_TAG:-latest}
+    image: ${ARTEX_IMAGE:-tomicdd/artex}:${ARTEX_TAG:-latest}
     depends_on:
       postgres:
         condition: service_healthy

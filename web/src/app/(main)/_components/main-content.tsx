@@ -15,6 +15,7 @@ import { LayoutControls } from "./sidebar/layout-controls";
 import { SearchDialog } from "./sidebar/search-dialog";
 import { ThemeSwitcher } from "./sidebar/theme-switcher";
 import { UpdateBadge } from "./update-badge";
+import { EgressIpNavbar, EgressIpProvider } from "./egress-ip-banner";
 
 // 任务详情页保持原样：它自带头部/Tabs 与内边距，这里不再叠加全局头部和 padding。
 function isFullBleed(pathname: string) {
@@ -32,6 +33,14 @@ function isFullBleed(pathname: string) {
 }
 
 export function MainContent({ children }: { children: ReactNode }) {
+  return (
+    <EgressIpProvider>
+      <MainContentInner>{children}</MainContentInner>
+    </EgressIpProvider>
+  );
+}
+
+function MainContentInner({ children }: { children: ReactNode }) {
   const currentUser = useCurrentUser();
   const pathname = usePathname();
   const [version, setVersion] = useState("");
@@ -55,8 +64,8 @@ export function MainContent({ children }: { children: ReactNode }) {
           "[html[data-navbar-style=sticky]_&]:sticky [html[data-navbar-style=sticky]_&]:top-0 [html[data-navbar-style=sticky]_&]:z-50 [html[data-navbar-style=sticky]_&]:overflow-hidden [html[data-navbar-style=sticky]_&]:rounded-t-[inherit] [html[data-navbar-style=sticky]_&]:bg-background/50 [html[data-navbar-style=sticky]_&]:backdrop-blur-md",
         )}
       >
-        <div className="flex w-full items-center justify-between px-4 lg:px-6">
-          <div className="flex items-center gap-1 lg:gap-2">
+        <div className="flex min-w-0 w-full items-center gap-3 px-4 lg:gap-4 lg:px-6">
+          <div className="flex shrink-0 items-center gap-1 lg:gap-2">
             <SidebarTrigger className="-ml-1" />
             <Separator
               orientation="vertical"
@@ -64,7 +73,10 @@ export function MainContent({ children }: { children: ReactNode }) {
             />
             <SearchDialog />
           </div>
-          <div className="flex items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <EgressIpNavbar />
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
             {version && (
               <span className="font-medium text-muted-foreground text-xs tabular-nums">版本 · {version}</span>
             )}

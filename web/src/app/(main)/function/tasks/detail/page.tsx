@@ -8,6 +8,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { ArchiveIcon, ArrowLeftIcon, BrainIcon, CheckIcon, CircleAlertIcon, PauseIcon, PlayIcon } from "lucide-react";
 import { toast } from "sonner";
 
+import { IntelligencePanel } from "@/components/intelligence-panel";
 import { StatusBadge } from "@/components/status-badge";
 import { TaskLLMProfileChain } from "@/components/task-llm-profile-chain";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -56,6 +57,7 @@ const TABS = [
   { value: "graph", label: "探索链路" },
   { value: "broadcast", label: "播报板" },
   { value: "findings", label: "发现" },
+  { value: "intelligence", label: "任务情报" },
   { value: "retests", label: "复测" },
   { value: "assets", label: "测试资产" },
   { value: "coverage", label: "资产覆盖图" },
@@ -215,7 +217,11 @@ function TaskDetailInner() {
   const [task, setTask] = React.useState<Task | null>(null);
   const [paused, setPaused] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
-  const [tab, setTab] = React.useState("sessions");
+  const requestedTab = searchParams.get("tab") ?? "sessions";
+  const [tab, setTab] = React.useState(TABS.some((item) => item.value === requestedTab) ? requestedTab : "sessions");
+  React.useEffect(() => {
+    if (TABS.some((item) => item.value === requestedTab)) setTab(requestedTab);
+  }, [requestedTab]);
   const [interceptPendingCount, setInterceptPendingCount] = React.useState(0);
   const [profiles, setProfiles] = React.useState<LLMProfile[]>([]);
   const [archiving, setArchiving] = React.useState(false);
@@ -354,7 +360,17 @@ function TaskDetailInner() {
   );
 
   return (
-    <Tabs value={tab} onValueChange={setTab} className="flex flex-1 flex-col gap-0">
+    <Tabs
+      value={tab}
+      onValueChange={(value) => {
+        setTab(value);
+        const params = new URLSearchParams(searchParams.toString());
+        params.set("tab", value);
+        params.delete("session");
+        router.replace(`/function/tasks/detail?${params.toString()}`, { scroll: false });
+      }}
+      className="flex flex-1 flex-col gap-0"
+    >
       {/* Top fixed area */}
       <header className="sticky top-0 z-10 flex flex-col gap-2 border-b bg-background/95 px-4 py-2.5 backdrop-blur lg:px-6">
         <div className="flex items-center gap-2">
@@ -404,6 +420,11 @@ function TaskDetailInner() {
           </Button>
         </div>
         <p className="truncate text-xs text-muted-foreground">{task.goal}</p>
+        {task.remark ? (
+          <p className="truncate text-xs text-muted-foreground" title={task.remark}>
+            备注：{task.remark}
+          </p>
+        ) : null}
         {/* Tabs */}
         <div className="no-scrollbar min-w-0 overflow-x-auto">
           <TabsList variant="default" className="min-w-max">
@@ -424,7 +445,7 @@ function TaskDetailInner() {
       {/* Tab content */}
       <div className="flex-1 p-4 lg:p-6">
         <TabsContent value="sessions" className="mt-0">
-          <SessionsTab taskId={id} />
+          <SessionsTab key={id} taskId={id} requestedSession={searchParams.get("session") ?? ""} />
         </TabsContent>
         <TabsContent value="overview" className="mt-0">
           <OverviewTab taskId={id} />
@@ -434,6 +455,9 @@ function TaskDetailInner() {
         </TabsContent>
         <TabsContent value="broadcast" className="mt-0">
           <BroadcastTab taskId={id} />
+        </TabsContent>
+        <TabsContent value="intelligence" className="mt-0">
+          <IntelligencePanel scope="tasks" scopeId={id} />
         </TabsContent>
         <TabsContent value="findings" className="mt-0">
           <FindingsTab taskId={id} />

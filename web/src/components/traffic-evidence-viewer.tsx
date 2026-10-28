@@ -2,9 +2,13 @@
 
 import * as React from "react";
 
+import { useRouter } from "next/navigation";
+
 import { toast } from "sonner";
 
 import { HttpCodeBlock } from "@/components/http-code-block";
+import { headersFromReqHead, requestFromEvidence } from "@/components/repeater/repeater-http";
+import { seedFromEvidence } from "@/components/repeater/repeater-store";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -27,6 +31,7 @@ export function TrafficEvidenceViewer({
   const [detail, setDetail] = React.useState<FindingTrafficDetail | null>(null);
   const [error, setError] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const router = useRouter();
   React.useEffect(() => {
     if (!bindingId) return;
     let active = true;
@@ -62,6 +67,25 @@ export function TrafficEvidenceViewer({
     }
   }
 
+  function openRepeater() {
+    if (!detail) return;
+    if (detail.request.binary) toast.info("请求体为二进制，已留空；完整正文请先下载");
+    else if (detail.request.truncated) toast.info("请求体为预览片段，完整正文请先下载");
+    seedFromEvidence(
+      requestFromEvidence(
+        {
+          method: detail.binding.snapshot.method || "GET",
+          url: detail.binding.snapshot.url || "",
+          headersText: headersFromReqHead(detail.binding.snapshot.req_head),
+          body: detail.request.binary ? "" : detail.request.content || "",
+        },
+        detail.binding.snapshot.req_head,
+      ),
+      { findingId, bindingId: detail.binding.id },
+    );
+    router.push("/function/repeater");
+  }
+
   return (
     <Dialog
       open={bindingId !== null}
@@ -71,10 +95,19 @@ export function TrafficEvidenceViewer({
     >
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>流量证据 #{bindingId}</DialogTitle>
-          <DialogDescription className="break-all">
-            {detail?.binding.snapshot.url ?? "查看绑定时保存的请求与响应"}
-          </DialogDescription>
+          <div className="flex flex-wrap items-start justify-between gap-2 pe-8">
+            <div>
+              <DialogTitle>流量证据 #{bindingId}</DialogTitle>
+              <DialogDescription className="break-all">
+                {detail?.binding.snapshot.url ?? "查看绑定时保存的请求与响应"}
+              </DialogDescription>
+            </div>
+            {detail ? (
+              <Button variant="outline" size="sm" onClick={openRepeater}>
+                送入请求重发
+              </Button>
+            ) : null}
+          </div>
         </DialogHeader>
         {error ? (
           <Alert variant="destructive">
@@ -89,7 +122,7 @@ export function TrafficEvidenceViewer({
             {(["request", "response"] as const).map((side) => (
               <TabsContent key={side} value={side}>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-xs text-muted-foreground">
+                  <span className="text-muted-foreground text-xs">
                     正文 {detail[side].total.toLocaleString()} 字节{detail[side].truncated ? " · 当前为预览" : ""}
                   </span>
                   <Button

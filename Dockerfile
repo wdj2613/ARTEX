@@ -19,12 +19,12 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 # 常用工具 + recon 常备件 + 渗透工具（bookworm 源直接有）：
 #   sqlmap / whatweb / hydra / sshpass / masscan / dirb / gobuster / ffuf / wapiti + 既有 nmap。
 # 字典随镜像发布（见文件末尾 COPY wordlists/）：换机器开箱即用，不依赖宿主机预置文件。
-# Node 从 NodeSource 装 20.x：bookworm 自带的 apt nodejs 是 18，Playwright 要求 >=20。
+# Node 从 NodeSource 装 22.x：与前端构建（CI 用 node 22）主版本一致；bookworm 自带 nodejs 是 18，Playwright 要求 >=20。
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates ripgrep curl wget vim git jq unzip \
       dnsutils iputils-ping netcat-openbsd inetutils-telnet whois nmap \
       sqlmap whatweb hydra sshpass masscan dirb gobuster ffuf wapiti \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 # nuclei / subfinder / httpx / dnsx / katana：bookworm 没有，用 projectdiscovery 官方 release
