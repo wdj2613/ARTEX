@@ -171,15 +171,17 @@ function FindingDetailInner() {
       <div className="flex-1 p-4 lg:p-6">
         {/* 概览：左（摘要 + 证据）/ 右（状态区） */}
         <TabsContent value="overview" className="mt-0">
-          <div className="grid gap-4 lg:grid-cols-3">
+          <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-3">
             {/* 左栏 */}
-            <div className="flex flex-col gap-4 lg:col-span-2">
+            <div className="flex min-w-0 flex-col gap-4 lg:col-span-2">
               <Card>
                 <CardHeader>
                   <CardTitle className="text-sm">摘要</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{finding.summary || "（无摘要）"}</p>
+                  <p className="break-words text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+                    {finding.summary || "（无摘要）"}
+                  </p>
                 </CardContent>
               </Card>
               <FindingRetestPanel key={`retest:${id}`} findingId={id} readOnly={finding.inherited} onCompleted={load} />
@@ -189,7 +191,7 @@ function FindingDetailInner() {
                 </CardHeader>
                 <CardContent>
                   {finding.evidence ? (
-                    <pre className="max-h-[46dvh] overflow-auto rounded-md bg-muted px-3 py-2 font-mono text-xs whitespace-pre-wrap">
+                    <pre className="max-h-[46dvh] overflow-auto rounded-md bg-muted px-3 py-2 font-mono text-xs break-words whitespace-pre-wrap [overflow-wrap:anywhere]">
                       {finding.evidence}
                     </pre>
                   ) : (

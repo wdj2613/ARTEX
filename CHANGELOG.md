@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### Web
+
+#### 修复的问题
+
+- **手机端「任务 → 发现」列表的标签重叠**：行容器是 `flex`（不换行），严重度标签与「流量证据 N 条」标签虽为 `whitespace-nowrap` 却仍是默认 `flex-shrink: 1`，390px 视口下被压到文字宽度以下，造成字体重叠。改为外层 `flex-wrap` + 两个标签 `shrink-0`；「流量证据」前缀在 `sm` 以下隐藏、只留「N 条」省宽度，桌面端文案不变。
+- **手机端「发现详情」页内容被裁切**：概览区 `grid gap-4 lg:grid-cols-3` 未声明窄屏列，隐式列按 `auto`（= max-content）被内容撑到 **786px**，而容器仅 326px，导致 130 个元素超出视口右边界被硬切。改为显式 `grid-cols-1`（`minmax(0,1fr)`）+ 子项 `min-w-0`；摘要与证据块的 `whitespace-pre-wrap` 补 `break-words [overflow-wrap:anywhere]`，长 URL / 无空格串不再撑宽。
+
 ## [0.4.0] - 2026-10-28
 
 ### 合并

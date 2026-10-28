@@ -55,7 +55,7 @@ function Row({
   const [open, setOpen] = React.useState(false);
   return (
     <div className="border-b last:border-b-0">
-      <div className="flex w-full items-center gap-3 px-4 py-3 text-sm hover:bg-accent/40">
+      <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-3 text-sm hover:bg-accent/40">
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
@@ -64,7 +64,7 @@ function Row({
           <ChevronRightIcon
             className={cn("size-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")}
           />
-          <StatusBadge domain="severity" value={f.severity} dot />
+          <StatusBadge domain="severity" value={f.severity} dot className="shrink-0" />
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             <div className="flex min-w-0 items-center gap-2">
               <span className="truncate font-medium">{findingLabel(f)}</span>
@@ -77,7 +77,10 @@ function Row({
             <span className="truncate text-xs text-muted-foreground">{f.summary}</span>
           </div>
         </button>
-        <Badge variant="outline">流量证据 {f.traffic_count ?? 0} 条</Badge>
+        <Badge variant="outline" className="shrink-0 whitespace-nowrap">
+          <span className="hidden sm:inline">流量证据 </span>
+          {f.traffic_count ?? 0} 条
+        </Badge>
         {f.assets && f.assets.length > 0 && (
           <div className="hidden shrink-0 flex-wrap justify-end gap-1 sm:flex">
             {f.assets.slice(0, 2).map((a) => (
