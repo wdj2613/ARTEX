@@ -4,6 +4,20 @@
 
 ## [Unreleased]
 
+## [0.3.23] - 2026-10-28
+
+### 自更新
+
+#### 修复的问题
+
+- **发布源指向本 fork**：`selfupdate` 的 `Repo` 原为上游 `Autumn-27/artex`，而该仓库已不存在（实测 GitHub API 返回 404），设置页「版本与更新」点检查更新必然失败并提示「仓库尚未发布任何正式版本」。现改为 `wdj2613/ARTEX`，并补注释说明发布方式：推 `v*` tag 后由 `release.yml` 自动构建五平台包、生成 `SHA256SUMS` 并创建 Release。资产命名两侧本就对齐（`AssetName` 与 `build.sh` 都去掉 tag 的 `v` 前缀，`artex-<版本>-<os>-<arch>.zip`）。
+
+### CI
+
+#### 修复的问题
+
+- **release 工作流的镜像 job 改推 GHCR**：原 `docker` job 推 Docker Hub `autumn27/artex`，依赖 `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` 两个 secrets，fork 里没有这两个值，导致每次推 tag 都留一个永久失败的 job。改为 `ghcr.io/${{ github.repository }}`，用内置 `GITHUB_TOKEN` 并新增 `packages: write` 权限，fork 无需任何额外配置即可全绿。
+
 ## [0.3.22] - 2026-10-28
 
 ### 工具链

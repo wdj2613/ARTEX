@@ -12,7 +12,11 @@ import (
 
 // Repo 是发布源。写死而不是做成配置项：更新源可配等于给任何能改配置的人一条
 // 远程代码执行通道，对一个渗透测试平台来说这个口子开不得。
-const Repo = "Autumn-27/artex"
+//
+// 指向本 fork（wdj2613/ARTEX）而不是上游：上游仓库已迁移，且自更新会下载上游二进制
+// 覆盖掉本 fork 的定制。发布由 .github/workflows/release.yml 在推 v* tag 时自动完成，
+// 资产名与 AssetName 对齐（artex-<版本>-<os>-<arch>.zip + SHA256SUMS）。
+const Repo = "wdj2613/ARTEX"
 
 // latestURL 是 GitHub 的"最新正式版"接口。它会自动跳过 prerelease 和 draft。
 const latestURL = "https://api.github.com/repos/" + Repo + "/releases/latest"
