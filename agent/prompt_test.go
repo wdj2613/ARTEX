@@ -80,3 +80,28 @@ func TestRenderSystemOverrideAndFallback(t *testing.T) {
 		t.Fatalf("worker without proxy must NOT inject trafficTool: %q", noProxy)
 	}
 }
+
+// TestToolboxSpecSurvivesOverride 锁定工具箱规约段 [F] 的位置：它是代码-owned 尾巴，
+// 用户改 DB 提示词也不能把它冲掉——否则换个提示词，模型就会忘掉"先用手边工具"。
+func TestToolboxSpecSurvivesOverride(t *testing.T) {
+	t.Cleanup(func() { PromptOverride = nil })
+	PromptOverride = func(k string) (string, bool) { return "CUSTOM BODY", true }
+
+	got := workerSystem("", "", "/data", "/data")
+	if !strings.Contains(got, "工具箱使用规约") {
+		t.Fatalf("worker 提示词被 DB 覆盖后丢了工具箱段: %q", got)
+	}
+	for _, want := range []string{"ffuf", "gobuster", "httpx", "whatweb", "nuclei", "sqlmap", "hydra", "subfinder", "dnsx", "masscan", "katana", "/opt/artex/wordlists/", "create_custom_tool", "/app/data/tools/"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("工具箱段缺少 %q（提示词：%q）", want, got)
+		}
+	}
+	if strings.Index(got, "中间产物输出规约") > strings.Index(got, "工具箱使用规约") {
+		t.Fatalf("工具箱段应在等待规约之后、进度留痕之前，顺序错了: %q", got)
+	}
+
+	main := mainAgentSystem("目标", "/data", "/data")
+	if !strings.Contains(main, "工具箱使用规约") {
+		t.Fatalf("main agent 提示词也应带工具箱段: %q", main)
+	}
+}

@@ -279,6 +279,19 @@ func workerWaitSpec() string {
 		"- **禁止用 `sleep` 等待**：单次 `sleep` 不得超过 30 秒，更长的阻塞等待会被平台直接拦掉；需要继续等就再轮询一次，把\"发起 → 抽查 → 写回结论\"做完就收尾。\n"
 }
 
+// workerToolboxSpec is 段 [F]: 工具箱使用规约。代码-owned，改 DB 提示词也丢不掉。
+// 存在的原因（线上 48h 实测）：容器里只有 nmap/curl/python，agent 于是把"目录爆破、
+// 口令爆破、指纹识别"全部手搓成 curl 循环，859 次 Bash 调用耗在 sleep 轮询上、1802 次
+// 是手写 curl；同时 555 条口令类意图里 270 条撞预算 exhausted。补齐工具链后，这段提示
+// 负责让模型**知道先用现成工具**，而不是继续手搓。
+func workerToolboxSpec() string {
+	return "\n\n**工具箱使用规约**（容器已预装常见渗透工具与字典，**先用现成工具，不要手搓 curl 循环**）：\n" +
+		"- **按场景选工具**：目录/路径爆破 `ffuf`、`gobuster`；指纹识别 `httpx`、`whatweb`；模板化漏洞 `nuclei`；SQL 注入 `sqlmap`；口令爆破 `hydra`、`sshpass`；子域枚举 `subfinder`、`dnsx`；端口扫描 `nmap`、`masscan`；爬虫取接口 `katana`。只有这些都不适用时才手写 curl/python。\n" +
+		"- **字典固定在 `/opt/artex/wordlists/`**（`common.txt` 常用路径、`dir-medium.txt` 目录中字典、`subdomains-5000.txt` 子域、`usernames.txt` 用户名、`passwords-top10k.txt` 口令）。直接引用该目录，**不要**去猜 `/usr/share/wordlists` 之类不存在的路径。\n" +
+		"- **装平台没有的工具**：优先 `apt-get install -y` / `pip3 install` / `go install`，或把静态二进制下载到 **`/app/data/tools/`**（该目录持久化，重建容器不丢）并 `chmod +x`；装完**必须**调 `create_custom_tool` 把它注册进平台，否则下个容器就找不到它。\n" +
+		"- **先 `command -v <工具>` 确认一次即可**，不要反复 `which` 试探浪费轮次。"
+}
+
 // workerProgressSpec is 段 [E]: 进度留痕的约定。意图是一次性时间预算，撞上限就被迫收尾，
 // 收尾时平台只能把"最后一次汇报"留给规划者——不汇报就等于这次白跑（线上 task#4 有 212 条
 // 意图 exhausted，其中多数续跑都是从零重来）。代码-owned，改 DB 提示词也丢不掉。
@@ -308,7 +321,7 @@ func workerSystem(proxyAddr, caCert, dataDir, runDir string) string {
 	// caCert is present only when the recording MITM is on, which is exactly when
 	// the traffic_* tools are registered — so it gates the traffic-tool note.
 	// Optional finding guidance is added for every role after tool resolution.
-	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + workerWaitSpec() + workerProgressSpec()
+	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + workerWaitSpec() + workerToolboxSpec() + workerProgressSpec()
 }
 
 // renderIntentTask formats the claimed intent for the worker's launch USER message:
