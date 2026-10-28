@@ -91,9 +91,14 @@ func TestToolboxSpecSurvivesOverride(t *testing.T) {
 	if !strings.Contains(got, "工具箱使用规约") {
 		t.Fatalf("worker 提示词被 DB 覆盖后丢了工具箱段: %q", got)
 	}
-	for _, want := range []string{"ffuf", "gobuster", "httpx", "whatweb", "nuclei", "sqlmap", "hydra", "subfinder", "dnsx", "masscan", "katana", "/opt/artex/wordlists/", "create_custom_tool", "/app/data/tools/"} {
+	for _, want := range []string{"ffuf", "gobuster", "dirb", "whatweb", "nuclei", "wapiti", "sqlmap", "hydra", "subfinder", "masscan", "/opt/artex/wordlists/", "create_custom_tool", "/app/data/tools/"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("工具箱段缺少 %q（提示词：%q）", want, got)
+		}
+	}
+	for _, absent := range []string{"httpx", "dnsx", "katana"} {
+		if strings.Contains(got, absent) {
+			t.Fatalf("提示词提到了镜像里没装的工具 %q，会让 agent 撞空", absent)
 		}
 	}
 	if strings.Index(got, "中间产物输出规约") > strings.Index(got, "工具箱使用规约") {

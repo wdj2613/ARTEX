@@ -286,9 +286,11 @@ func workerWaitSpec() string {
 // 负责让模型**知道先用现成工具**，而不是继续手搓。
 func workerToolboxSpec() string {
 	return "\n\n**工具箱使用规约**（容器已预装常见渗透工具与字典，**先用现成工具，不要手搓 curl 循环**）：\n" +
-		"- **按场景选工具**：目录/路径爆破 `ffuf`、`gobuster`；指纹识别 `httpx`、`whatweb`；模板化漏洞 `nuclei`；SQL 注入 `sqlmap`；口令爆破 `hydra`、`sshpass`；子域枚举 `subfinder`、`dnsx`；端口扫描 `nmap`、`masscan`；爬虫取接口 `katana`。只有这些都不适用时才手写 curl/python。\n" +
+		"- **按场景选工具**（以下均已装好）：目录/路径爆破 `ffuf`、`gobuster`、`dirb`；指纹识别 `whatweb`；模板化漏洞 `nuclei`；Web 漏洞扫描 `wapiti`；SQL 注入 `sqlmap`；口令爆破 `hydra`、`sshpass`；子域枚举 `subfinder`；端口扫描 `nmap`、`masscan`。只有这些都不适用时才手写 curl/python。\n" +
 		"- **字典固定在 `/opt/artex/wordlists/`**（`common.txt` 常用路径、`dir-medium.txt` 目录中字典、`subdomains-5000.txt` 子域、`usernames.txt` 用户名、`passwords-top10k.txt` 口令）。直接引用该目录，**不要**去猜 `/usr/share/wordlists` 之类不存在的路径。\n" +
 		"- **装平台没有的工具**：优先 `apt-get install -y` / `pip3 install` / `go install`，或把静态二进制下载到 **`/app/data/tools/`**（该目录持久化，重建容器不丢）并 `chmod +x`；装完**必须**调 `create_custom_tool` 把它注册进平台，否则下个容器就找不到它。\n" +
+		"- **字典直接用，不要现造**：`/opt/artex/wordlists/` 已内置常用字典（路径 `dir-medium.txt` 22 万行、口令 `passwords-top10k.txt`、子域 `subdomains-5000.txt`、用户名 `usernames.txt`）。通用字典**不要自己生成、不要满盘搜索、不要尝试下载**——线上曾因反复搜字典 + 现场造通用字典浪费数十轮。只有**针对性**字典（目标默认口令、特定用户名口令组合、业务专有路径）才需要自己写脚本生成，且必须基于已收集到的情报。\n" +
+		"- **网络失败先重试再下结论**：单次 `curl`/`pip`/`apt` 失败**不等于**没有外网（同一容器实测几分钟后 github 可达）。失败时先重试 2–3 次、换源（`pip3 install -i https://pypi.tuna.tsinghua.edu.cn/simple`）或换协议，确实不通再退回镜像内置工具；**不要一次失败就断定「无外网」并从此放弃下载路线**。\n" +
 		"- **先 `command -v <工具>` 确认一次即可**，不要反复 `which` 试探浪费轮次。"
 }
 
