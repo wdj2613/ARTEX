@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# 准备字典与 nuclei 模板（不打进镜像的大体积资源）。
+# 准备"更大的字典"与 nuclei 模板（可选，默认不需要）。
+#
+# 镜像已内置一份常用字典（wordlists/ 2.1MB）与 nuclei 模板（84MB），开箱即用。
+# 本脚本用于需要**更大字典**的场景：下载到宿主机后，把该目录挂载覆盖镜像内置的那份。
 #
 # 用法：
 #   ./scripts/fetch-wordlists.sh [目标目录]     # 默认当前目录
 #
-# 产出的两个目录由 docker-compose.yml 只读挂载：
-#   <目标目录>/wordlists        → 容器 /opt/artex/wordlists
-#   <目标目录>/nuclei-templates → 容器 /root/.local/share/nuclei-templates
+# 产出的两个目录用 docker-compose.yml 里（已注释的）两行挂载：
+#   <目标目录>/wordlists        → 容器 /opt/artex/wordlists（覆盖镜像内置）
+#   <目标目录>/nuclei-templates → 容器 /root/.local/share/nuclei-templates（覆盖镜像内置）
 #
 # 国内网络受限时先 export https_proxy=http://<host>:7890
 set -euo pipefail

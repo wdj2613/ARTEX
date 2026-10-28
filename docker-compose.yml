@@ -37,10 +37,13 @@ services:
       # 把项目根目录的 skills 挂进容器（覆盖镜像内置的 /app/skills）；
       # 改 skill 无需重建镜像，容器读的就是宿主机这份。
       - ./skills:/app/skills
-      # 字典与 nuclei 模板：体积大（数百 MB），不打进镜像，由 scripts/fetch-wordlists.sh
-      # 下载到项目根目录后只读挂载。目录不存在时 Docker 会建空目录，agent 只是没有字典可用。
-      - ./wordlists:/opt/artex/wordlists:ro
-      - ./nuclei-templates:/root/.local/share/nuclei-templates:ro
+      # 字典与 nuclei 模板已随镜像发布（wordlists/ 2.1MB + 模板 84MB），默认无需挂载。
+      # 想换更大的字典（如全量 SecLists）：先跑 scripts/fetch-wordlists.sh 下载到本目录，
+      # 再取消下面两行注释即可覆盖镜像内置的那份。
+      # 注意：不要保留注释掉的挂载行同时删掉目录——目录不存在时 Docker 会创建空目录并挂载，
+      # 反而把镜像内置的字典盖成空的。
+      # - ./wordlists:/opt/artex/wordlists:ro
+      # - ./nuclei-templates:/root/.local/share/nuclei-templates:ro
     restart: unless-stopped
 
 volumes:

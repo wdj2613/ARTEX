@@ -18,7 +18,7 @@ ARG HTTPS_PROXY
 ARG PIP_INDEX_URL=https://pypi.org/simple
 # 常用工具 + recon 常备件 + 渗透工具（bookworm 源直接有）：
 #   sqlmap / whatweb / hydra / sshpass / masscan / dirb / gobuster / ffuf / wapiti + 既有 nmap。
-# 字典不打进镜像（1.5GB 级），由 compose 只读挂载 /opt/artex/wordlists。
+# 字典随镜像发布（见文件末尾 COPY wordlists/）：换机器开箱即用，不依赖宿主机预置文件。
 # Node 从 NodeSource 装 20.x：bookworm 自带的 apt nodejs 是 18，Playwright 要求 >=20。
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates ripgrep curl wget vim git jq unzip \
@@ -28,7 +28,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 # nuclei / subfinder：bookworm 没有，用 projectdiscovery 官方 release 按架构下载。
-# （nuclei 模板不随镜像发布，由 compose 挂载到 /root/.local/share/nuclei-templates。）
 RUN if [ "$TARGETARCH" = "arm64" ]; then ARCH=arm64; else ARCH=amd64; fi; \
     [ -n "$HTTPS_PROXY" ] && P="--proxy $HTTPS_PROXY" || P=""; \
     curl -fsSL --retry 2 $P -o /tmp/nuclei.zip \
@@ -38,6 +37,20 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then ARCH=arm64; else ARCH=amd64; fi; \
       "https://github.com/projectdiscovery/subfinder/releases/download/v2.17.0/subfinder_2.17.0_linux_${ARCH}.zip" \
     && unzip -o -q /tmp/subfinder.zip -d /usr/local/bin && rm /tmp/subfinder.zip \
     && nuclei -version 2>&1 | head -1 && subfinder -version 2>&1 | head -1
+# nuclei 模板随镜像发布（~84MB）：没有模板的 nuclei 等于没有规则可跑。
+# 单独成层，改业务代码或字典都不会让这 84MB 重新下载。
+# 下载失败只告警不中断——镜像仍有 nuclei 可用，且可用 compose 挂载同名路径补齐。
+RUN [ -n "$HTTPS_PROXY" ] && P="--proxy $HTTPS_PROXY" || P=""; \
+    mkdir -p /root/.local/share/nuclei-templates; \
+    if curl -fsSL --retry 3 -m 900 $P -o /tmp/nt.zip \
+         "https://github.com/projectdiscovery/nuclei-templates/archive/refs/heads/main.zip"; then \
+      unzip -q -o /tmp/nt.zip -d /tmp/nt \
+      && mv /tmp/nt/nuclei-templates-main/* /root/.local/share/nuclei-templates/ \
+      && rm -rf /tmp/nt /tmp/nt.zip \
+      && echo "nuclei 模板: $(find /root/.local/share/nuclei-templates -name '*.yaml' | wc -l) 个"; \
+    else \
+      echo "警告：nuclei 模板下载失败，镜像不含模板（可挂载 /root/.local/share/nuclei-templates 补齐）"; \
+    fi
 # 预装 Playwright MCP 与 CLI（全局），运行时不再 npx 联网下载。
 # @playwright/mcp：browser MCP 直接 `npx @playwright/mcp`（已全局装好，无需 -y/@latest）。
 # @playwright/cli：提供 playwright-cli，装完顺带 --help 验证可执行。
@@ -61,6 +74,10 @@ COPY dist/${TARGETARCH}/artex /app/artex
 COPY start.sh /app/start.sh
 RUN chmod +x /app/artex /app/start.sh
 COPY skills/ /app/skills/
+# 字典随镜像发布（5 个文件共 ~2.1MB）：换机器开箱即用，agent 不必再满世界找字典。
+# 想换更大的字典（如全量 SecLists）：跑 scripts/fetch-wordlists.sh 下载到宿主机，
+# 再用 compose 把该目录挂到 /opt/artex/wordlists 覆盖同名路径（bind mount 天然覆盖内置）。
+COPY wordlists/ /opt/artex/wordlists/
 # data/（SQLite + jwt.key）持久化点
 VOLUME ["/app/data"]
 EXPOSE 8787 8788
