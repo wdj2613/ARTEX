@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [0.3.22] - 2026-10-28
+
+### 工具链
+
+#### 新增的功能
+
+- **补齐 projectdiscovery 探测链**：新增 `httpx` v1.12.0（存活与指纹探测）、`dnsx` v1.3.1（子域解析）、`katana` v1.8.0（接口爬取），与既有 `subfinder`/`nuclei` 构成完整链路 `subfinder → dnsx → httpx → nuclei`。三者 bookworm 源都没有，按 `TARGETARCH` 从官方 release 下载；下载层改为循环，一个失败即中断（不再静默跳过）。镜像 3.1 → 3.2GB。
+- **提示词与技能同步**：工具箱清单恢复为 15 个已装工具（含 httpx/dnsx/katana），并写明典型串联顺序；技能里三处因"镜像没有该工具"而写的替代方案（dig 循环、curl 提取源码、playwright 抓包）恢复为标准命令。测试断言改为正向 13 个工具名 + 反向 `nikto`/`hashcat`（这两个确实未装，提示词不得提及）。
+
 ## [0.3.21] - 2026-10-28
 
 ### 工具链

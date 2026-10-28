@@ -27,16 +27,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
-# nuclei / subfinder：bookworm 没有，用 projectdiscovery 官方 release 按架构下载。
+# nuclei / subfinder / httpx / dnsx / katana：bookworm 没有，用 projectdiscovery 官方 release
+# 按架构下载。这五个构成完整探测链：子域(subfinder/dnsx) → 存活指纹(httpx) → 模板漏洞(nuclei)
+# → 接口爬取(katana)。
 RUN if [ "$TARGETARCH" = "arm64" ]; then ARCH=arm64; else ARCH=amd64; fi; \
     [ -n "$HTTPS_PROXY" ] && P="--proxy $HTTPS_PROXY" || P=""; \
-    curl -fsSL --retry 2 $P -o /tmp/nuclei.zip \
-      "https://github.com/projectdiscovery/nuclei/releases/download/v3.11.1/nuclei_3.11.1_linux_${ARCH}.zip" \
-    && unzip -o -q /tmp/nuclei.zip -d /usr/local/bin && rm /tmp/nuclei.zip \
-    && curl -fsSL --retry 2 $P -o /tmp/subfinder.zip \
-      "https://github.com/projectdiscovery/subfinder/releases/download/v2.17.0/subfinder_2.17.0_linux_${ARCH}.zip" \
-    && unzip -o -q /tmp/subfinder.zip -d /usr/local/bin && rm /tmp/subfinder.zip \
-    && nuclei -version 2>&1 | head -1 && subfinder -version 2>&1 | head -1
+    for spec in nuclei:v3.11.1 subfinder:v2.17.0 httpx:v1.12.0 dnsx:v1.3.1 katana:v1.8.0; do \
+      name="${spec%%:*}"; ver="${spec##*:}"; \
+      curl -fsSL --retry 2 $P -o "/tmp/${name}.zip" \
+        "https://github.com/projectdiscovery/${name}/releases/download/${ver}/${name}_${ver#v}_linux_${ARCH}.zip" \
+      && unzip -o -q "/tmp/${name}.zip" -d /usr/local/bin && rm -f "/tmp/${name}.zip" \
+      || { echo "下载/解压失败: ${name} ${ver}"; exit 1; }; \
+    done; \
+    for t in nuclei subfinder httpx dnsx katana; do printf "%-10s " "$t"; $t -version 2>&1 | head -1; done
 # nuclei 模板随镜像发布（~84MB）：没有模板的 nuclei 等于没有规则可跑。
 # 单独成层，改业务代码或字典都不会让这 84MB 重新下载。
 # 下载失败只告警不中断——镜像仍有 nuclei 可用，且可用 compose 挂载同名路径补齐。
