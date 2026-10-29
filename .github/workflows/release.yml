@@ -152,6 +152,8 @@ jobs:
           sha256sum --check SHA256SUMS
       - name: Collect release notes from CHANGELOG
         working-directory: dist
+        env:
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
         run: |
           version="${RELEASE_TAG#v}"
           # 版本正文以 CHANGELOG 的本版本小节为准（用户要求：Release 说明必须写清该版本改了什么，
@@ -190,22 +192,19 @@ jobs:
           程序包提供 Linux、macOS 的 AMD64 / ARM64 及 Windows AMD64，并附 SHA256SUMS。
           部署和在线更新说明见本仓库 README。
           EOF
+          # 引号 heredoc 不展开变量，提交行单独追加，发布页据此自证正文来源。
+          printf '\n对应提交：`%s`\n' "${RELEASE_COMMIT:0:7}" >> release-notes.md
           head -5 release-notes.md
-      - name: Replace release only when the tag moved to a new commit
+      # 同标签的旧 Release 一律先删再建。不要试图「有就更新」：实测 softprops 在已有 Release 上
+      # 不会替换正文，标签移动后会留下上一版的正文（0.4.2 首轮发布就是这么停在旧长文上的）。
+      # 删除是需要权限的唯一写操作，删失败仍继续则视为错误。
+      - name: Drop the existing release for this tag so the body is rebuilt
         env:
           RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
         run: |
           if gh release view "$RELEASE_TAG" --json isDraft,targetCommitish > /tmp/artex-release.json 2>/tmp/artex-release.err; then
-            draft=$(jq -r .isDraft /tmp/artex-release.json)
-            target=$(jq -r '.targetCommitish // empty' /tmp/artex-release.json)
-            if [[ "$draft" != "true" ]]; then
-              if [[ "$target" == "$RELEASE_COMMIT" ]]; then
-                echo "该版本已发布且已指向当前提交，拒绝重复发布" >&2
-                exit 1
-              fi
-              echo "标签已移动到新提交，删除旧 Release 后重新创建 $RELEASE_TAG"
-              gh release delete "$RELEASE_TAG" --yes
-            fi
+            echo "已有 $RELEASE_TAG（target=$(jq -r '.targetCommitish // "?"' /tmp/artex-release.json)，本次提交=$RELEASE_COMMIT），删除后按本次正文重建"
+            gh release delete "$RELEASE_TAG" --yes
           elif ! grep -qi 'release not found\|HTTP 404' /tmp/artex-release.err; then
             cat /tmp/artex-release.err >&2
             exit 1
