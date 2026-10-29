@@ -128,46 +128,6 @@ type SessionTokenUsage struct {
 	CacheWriteTokens int    `json:"cache_write_tokens"`
 }
 
-// DailyTokenBucket is one day's global token aggregate across all tasks.
-type DailyTokenBucket struct {
-	Day             string `json:"day"` // "YYYY-MM-DD"
-	InputTokens     int    `json:"input_tokens"`
-	OutputTokens    int    `json:"output_tokens"`
-	CacheReadTokens int    `json:"cache_read_tokens"`
-}
-
-// TokenDailyAll aggregates token consumption by calendar day (UTC) for the
-// past `days` days across all explorations. Only kind='result' rows carry token
-// counts (the terminal per-run summary), so there is no double-counting.
-func (d *DB) TokenDailyAll(days int) ([]DailyTokenBucket, error) {
-	if days <= 0 {
-		days = 30
-	}
-	rows, err := d.Query(`
-		SELECT TO_CHAR(DATE_TRUNC('day', created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day,
-		       COALESCE(SUM(input_tokens), 0),
-		       COALESCE(SUM(output_tokens), 0),
-		       COALESCE(SUM(cache_read_tokens), 0)
-		FROM activity
-		WHERE kind = 'result'
-		  AND created_at >= NOW() - ($1 * INTERVAL '1 day')
-		GROUP BY day
-		ORDER BY day`, days)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []DailyTokenBucket
-	for rows.Next() {
-		var b DailyTokenBucket
-		if err := rows.Scan(&b.Day, &b.InputTokens, &b.OutputTokens, &b.CacheReadTokens); err != nil {
-			return nil, err
-		}
-		out = append(out, b)
-	}
-	return out, rows.Err()
-}
-
 // ExplorationStore is a handle onto one exploration's reasoning graph + activity.
 type ExplorationStore struct {
 	db    *DB
@@ -1283,42 +1243,6 @@ func (d *DB) ExplorationDiag(expID int64) (expExists bool, taskRefs int, maxExpI
 	return
 }
 
-// TokenTotal sums token usage across ALL workers for this exploration (whole-task
-// total). Same source as TokenStatsByWorker (kind='result' rows), just ungrouped.
-func (s *ExplorationStore) TokenTotal() (TokenUsage, error) {
-	var u TokenUsage
-	err := s.db.QueryRow(`SELECT
-		COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
-		COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_write_tokens),0)
-	FROM activity WHERE exploration_id=$1 AND kind='result'`, s.expID).
-		Scan(&u.InputTokens, &u.OutputTokens, &u.CacheReadTokens, &u.CacheWriteTokens)
-	return u, err
-}
-
-// TokenTotalsAll returns the whole-task token total for every exploration in one
-// query (exploration_id → total), so the task list can show per-task consumption
-// without a query per row.
-func (d *DB) TokenTotalsAll() (map[int64]TokenUsage, error) {
-	rows, err := d.Query(`SELECT exploration_id,
-		COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
-		COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_write_tokens),0)
-	FROM activity WHERE kind='result' GROUP BY exploration_id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[int64]TokenUsage{}
-	for rows.Next() {
-		var eid int64
-		var u TokenUsage
-		if err := rows.Scan(&eid, &u.InputTokens, &u.OutputTokens, &u.CacheReadTokens, &u.CacheWriteTokens); err != nil {
-			return nil, err
-		}
-		out[eid] = u
-	}
-	return out, rows.Err()
-}
-
 // LastActivityAll returns the unix time of the most recent activity per
 // exploration (exploration_id → max created_at epoch), one query for all tasks.
 // Persisted (unlike Engine.LastActivity's in-memory map), so it survives restarts
@@ -1362,10 +1286,10 @@ type TaskListMetrics struct {
 func (d *DB) TaskListMetricsAll() (map[int64]TaskListMetrics, error) {
 	rows, err := d.Query(`
 		SELECT task.exploration_id,
-		       COALESCE(token_metrics.input_tokens,0),
-		       COALESCE(token_metrics.output_tokens,0),
-		       COALESCE(token_metrics.cache_read_tokens,0),
-		       COALESCE(token_metrics.cache_write_tokens,0),
+		       COALESCE(token_metrics.input_tokens, archived_tokens.input_tokens, 0),
+		       COALESCE(token_metrics.output_tokens, archived_tokens.output_tokens, 0),
+		       COALESCE(token_metrics.cache_read_tokens, archived_tokens.cache_read_tokens, 0),
+		       COALESCE(token_metrics.cache_write_tokens, archived_tokens.cache_write_tokens, 0),
 		       COALESCE(latest_activity.created_at,0),
 		       COALESCE(goal_metrics.total,0),
 		       COALESCE(goal_metrics.met,0),
@@ -1378,11 +1302,25 @@ func (d *DB) TaskListMetricsAll() (map[int64]TaskListMetrics, error) {
 		LEFT JOIN LATERAL (
 			SELECT SUM(input_tokens) AS input_tokens,
 			       SUM(output_tokens) AS output_tokens,
-			       SUM(cache_read_tokens) AS cache_read_tokens,
-			       SUM(cache_write_tokens) AS cache_write_tokens
-			FROM activity
-			WHERE exploration_id=task.exploration_id AND kind='result'
+			       SUM(cache_read) AS cache_read_tokens,
+			       SUM(cache_write) AS cache_write_tokens
+			FROM llm_usage
+			WHERE exploration_id=task.exploration_id
 		) token_metrics ON true
+		-- Archived tasks have their detail rows (activity + llm_usage) extracted into
+		-- the cold archive, so the live ledger is empty for them. Fall back to the
+		-- archive manifest's aggregate so a task never drops to "0 tokens" just
+		-- because it was archived.
+		LEFT JOIN LATERAL (
+			SELECT (aggregate_stats->'tokens'->>'input_tokens')::bigint AS input_tokens,
+			       (aggregate_stats->'tokens'->>'output_tokens')::bigint AS output_tokens,
+			       (aggregate_stats->'tokens'->>'cache_read_tokens')::bigint AS cache_read_tokens,
+			       (aggregate_stats->'tokens'->>'cache_write_tokens')::bigint AS cache_write_tokens
+			FROM task_archives
+			WHERE task_id=task.id AND (aggregate_stats->'tokens') IS NOT NULL
+			ORDER BY id DESC
+			LIMIT 1
+		) archived_tokens ON true
 		LEFT JOIN LATERAL (
 			SELECT EXTRACT(EPOCH FROM created_at)::bigint AS created_at
 			FROM activity
@@ -1462,64 +1400,6 @@ func (d *DB) GoalCountsAll() (map[int64]GoalCounts, error) {
 			return nil, err
 		}
 		out[eid] = gc
-	}
-	return out, rows.Err()
-}
-
-// TokenStatsByWorker sums token usage per worker for this exploration (from the
-// kind='result' records that carry usage). Used by the per-agent token display.
-func (s *ExplorationStore) TokenStatsByWorker() ([]TokenUsage, error) {
-	rows, err := s.db.Query(`SELECT COALESCE(worker,''),
-		COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
-		COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_write_tokens),0)
-	FROM activity WHERE exploration_id=$1 AND kind='result'
-	GROUP BY worker ORDER BY worker`, s.expID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []TokenUsage{}
-	for rows.Next() {
-		var u TokenUsage
-		if err := rows.Scan(&u.Worker, &u.InputTokens, &u.OutputTokens, &u.CacheReadTokens, &u.CacheWriteTokens); err != nil {
-			return nil, err
-		}
-		out = append(out, u)
-	}
-	return out, rows.Err()
-}
-
-// TokenStatsBySession aggregates every persisted completed run, independent of
-// activity-history pagination. Main/planner use fixed keys; Worker executions use
-// their intent node id, even when a different work#N process handled a retry.
-func (s *ExplorationStore) TokenStatsBySession() ([]SessionTokenUsage, error) {
-	rows, err := s.db.Query(`SELECT
-		CASE
-			WHEN COALESCE(a.worker,'')='mainagent' THEN 'main:' || COALESCE(a.main_seg,0)::text
-			WHEN COALESCE(a.worker,'')='planner' THEN 'plan'
-			WHEN n.id IS NOT NULL THEN 'intent:' || n.id::text
-			ELSE ''
-		END AS session_key,
-		COALESCE(SUM(a.input_tokens),0), COALESCE(SUM(a.output_tokens),0),
-		COALESCE(SUM(a.cache_read_tokens),0), COALESCE(SUM(a.cache_write_tokens),0)
-	FROM activity a
-	LEFT JOIN exploration_nodes n
-	  ON n.id=a.node_id AND n.exploration_id=a.exploration_id AND n.kind='intent'
-	WHERE a.exploration_id=$1 AND a.kind='result'
-	  AND (COALESCE(a.worker,'') IN ('mainagent','planner') OR n.id IS NOT NULL)
-	GROUP BY session_key
-	ORDER BY session_key`, s.expID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []SessionTokenUsage{}
-	for rows.Next() {
-		var u SessionTokenUsage
-		if err := rows.Scan(&u.Session, &u.InputTokens, &u.OutputTokens, &u.CacheReadTokens, &u.CacheWriteTokens); err != nil {
-			return nil, err
-		}
-		out = append(out, u)
 	}
 	return out, rows.Err()
 }

@@ -5,48 +5,6 @@ import (
 	"time"
 )
 
-// ConvTokenSummary is one conversation's token total (sum of its kind='result'
-// rows) with its profile + created_at, used to merge conversation usage into the
-// dashboard's per-profile / daily token stats (which otherwise cover only tasks).
-type ConvTokenSummary struct {
-	LLMProfileID     *int64 `json:"llm_profile_id"`
-	CreatedAt        string `json:"created_at"`
-	InputTokens      int    `json:"input_tokens"`
-	OutputTokens     int    `json:"output_tokens"`
-	CacheReadTokens  int    `json:"cache_read_tokens"`
-	CacheWriteTokens int    `json:"cache_write_tokens"`
-}
-
-// ConversationTokenSummaries returns one row per conversation with its summed
-// result-row token usage (0 for conversations with no completed run yet).
-func (d *DB) ConversationTokenSummaries() ([]ConvTokenSummary, error) {
-	rows, err := d.Query(`
-SELECT c.llm_profile_id, c.created_at::text,
-       COALESCE(sum(ca.input_tokens),0), COALESCE(sum(ca.output_tokens),0),
-       COALESCE(sum(ca.cache_read_tokens),0), COALESCE(sum(ca.cache_write_tokens),0)
-FROM conversations c
-LEFT JOIN conversation_activities ca ON ca.conversation_id = c.id AND ca.kind = 'result'
-GROUP BY c.id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []ConvTokenSummary{}
-	for rows.Next() {
-		var s ConvTokenSummary
-		var pid sql.NullInt64
-		if err := rows.Scan(&pid, &s.CreatedAt, &s.InputTokens, &s.OutputTokens, &s.CacheReadTokens, &s.CacheWriteTokens); err != nil {
-			return nil, err
-		}
-		if pid.Valid {
-			v := pid.Int64
-			s.LLMProfileID = &v
-		}
-		out = append(out, s)
-	}
-	return out, rows.Err()
-}
-
 // Conversation is one ChatGPT-style chat thread bound to an agent key. It lives
 // independent of the pentest exploration graph — see schema.sql §I.
 type Conversation struct {

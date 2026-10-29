@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-29
+
+### LLM
+
+#### 修复的问题
+
+- **仪表盘 token 统计并成一本账（`llm_usage`），删掉「旧版 / 新版」两套口径**：两套不是新老算法，而是两个不同粒度的账 —— `activity` 每次 agent run 结束写一条 `kind='result'`（累计快照），`llm_usage` 每次模型调用写一行。旧口径在仪表盘上少算 **45%**（1,066.7M vs 1,953.3M），四个原因全部实测：已归档任务的账被抽进 manifest（876M 归零）、`compactor`/`btw`/`goals` 这些不写 `activity` 的通道整条不计、进程被杀或超时的 run 一条账都没有、日图还按**任务创建日**归桶（10-25 一天 602M、10-23/24 全 0）。归档链路早就只从 `llm_usage` 算聚合，写侧一直认定的真源就是它 —— 缺的只是读路径。现在仪表盘、任务列表、任务详情三处读路径统一走 `llm_usage`，`activity` 的 token 字段降级为事件快照（只供实时展示，不再进统计）。
+- **任务详情「按会话分解」改由计量账本给出，并给历史行留回退**：账本原来没有会话维度，所以「每段主会话 / 每个意图花了多少」只有旧账本能给。现在 `llm_usage.session` 记录 transcript 会话 id，映射成 UI 的 `main:<seg>` / `plan` / `intent:<id>`（后台 lane 与 chat 只进总量、不生成会话行）。`session` 列上线前的行全是 NULL，直接切会被统计成空 —— 因此**按任务**回退：该任务一行带 session 的调用都没有时，用 `activity` 的 run 行还原（实测覆盖 99%~100%），有一行就只认账本，两套永不同时相加（同一笔消耗两种描述，并集必然双计）。跨上线点的任务暂时只显示上线后新增的调用，随数据自然收敛。
+- **任务列表的 token 列改读计量账本，并补上归档任务的聚合**：列表原来只读 `activity`，归档任务行被抽走后一律显示 0，导致仪表盘总量与列表求和对不上（差 876M）。改成读 `llm_usage` 并用 `COALESCE(task_archives.aggregate_stats->'tokens')` 兜住归档任务；顺手修掉仪表盘「任务数」把各 profile 的 tasks 相加的双计（一个任务跨 3 个 profile 会被算 3 次），改取账本的 distinct 任务数（含归档）。
+- **仪表盘合计与「任务列表求和」严格相等**：已硬删除的任务**有意**保留账本行（历史记账，`db/tasks.go` 有明确注释），但这些行再也无法在任何页面查到，计入仪表盘就会让「仪表盘 = Σ任务列表(含归档) + Σ会话」不成立（实测差 0.4M）。改为三个全局聚合（`UsageByProfile` / `UsageDaily` / `UsageTaskCount`）统一带上「chat 行 或 所属任务仍存在」的谓词：账本一行不删，仪表盘不统计查不到的行，差值为 0（实测 1,993,718,154 = 1,993,718,154）。
+
+#### 删除的功能
+
+- **仪表盘「旧版 / 新版」数据源开关，以及两个前端零调用的 token 接口**：开关连同 `tokenByProfileOld` / `dailyTokenDataOld` / `convTokens` 两套派生、每 5s 空打一次的 `api.tokenStats()`（取的是"当前活跃任务"的量，其状态从未渲染）一起删除；后端删掉 `GET /api/tokens/daily`、`GET /api/tokens/conversations`、`GET /api/llm/records/by-model` 三个无调用方接口，以及 `TokenTotalsAll` / `TokenDailyAll` / `TokenStatsByWorker` / `TokenStatsBySession` / `ConversationTokenSummaries` 五个旧聚合函数与它们的 DTO。`/api/exploration/tokens` 保留原出参形状只换实现，前端 0 行改动。chat 页仍用 `conversation_activities` 实时算「这次对话花了多少」，那是另一个问题。
+
 ### Agent
 
 #### 新增的功能
@@ -21,6 +36,7 @@
 #### 新增的功能
 
 - **仪表盘「出口 IP」卡片**：进仪表盘自动探测一次（未配置全局代理时只探直连），卡片内两栏并排显示<b>真实出口</b>（不经过代理的 IP）与<b>代理出口</b>（经已保存的全局代理出网的 IP），各带连通状态点、往返延迟与失败原因（取首个出错地址，`refused`=代理没开、`timeout`=出不了网），右上角可手动刷新——轮询不触发探测，避免每 5s 发一次真实出网请求。数据复用已有的 `POST /api/settings/proxy/test`，不新增接口、不新增表。响应式：窄屏单列堆叠、`sm` 以上两列，IPv6 用 `break-all` + `[overflow-wrap:anywhere]` 断行；390px 与 1280px 实测卡片无裁切、页面无横向滚动（`documentElement.scrollWidth` 等于视口宽，越界元素 0 个）。
+- **仪表盘 token 卡片的统计口径与任务数**：卡片不再随「旧版/新版」开关跳变，数据源标注固定为 `llm_usage`；「任务数」改用账本的 distinct 任务数，跨 profile 的任务不再被重复计（同一任务跑过 3 个 profile 会被算 3 次）。
 
 ## [0.4.1] - 2026-10-28
 

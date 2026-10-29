@@ -78,12 +78,6 @@ func TestCancelIntentPreservesTokenMeteringWithoutDoubleCount(t *testing.T) {
 		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
 	}
 
-	baselineDaily, err := d.TokenDailyAll(30)
-	if err != nil {
-		t.Fatal(err)
-	}
-	baseline := dailyTokenBuckets(baselineDaily)
-
 	appendUsage := func(kind string, at time.Time, input, output, read, write *int) {
 		t.Helper()
 		activityID, appendErr := store.AppendActivity(Activity{
@@ -111,8 +105,8 @@ func TestCancelIntentPreservesTokenMeteringWithoutDoubleCount(t *testing.T) {
 	fallbackDay := atUTCNoon(4)
 	trailingDay := atUTCNoon(2)
 
-	// Run 1 has an authoritative result; its preceding cumulative frame must not
-	// be counted a second time or move usage to the frame's earlier date.
+	// Run 1 has an authoritative result; its preceding cumulative frame must not be
+	// counted a second time or move usage to the frame's earlier date.
 	i, o, r, w := values(100, 100, 100, 100)
 	appendUsage("usage", atUTCNoon(7), i, o, r, w)
 	i, o, r, w = values(10, 11, 12, 13)
@@ -126,15 +120,6 @@ func TestCancelIntentPreservesTokenMeteringWithoutDoubleCount(t *testing.T) {
 	i, o, r, w = values(30, 31, 32, 33)
 	appendUsage("usage", trailingDay, i, o, r, w)
 
-	beforeCancelDaily, err := d.TokenDailyAll(30)
-	if err != nil {
-		t.Fatal(err)
-	}
-	beforeCancel := dailyTokenBuckets(beforeCancelDaily)
-	assertDailyTokenDelta(t, beforeCancel, baseline, authoritativeDay, 10, 11, 12)
-	assertDailyTokenDelta(t, beforeCancel, baseline, fallbackDay, 0, 0, 0)
-	assertDailyTokenDelta(t, beforeCancel, baseline, trailingDay, 0, 0, 0)
-
 	if err := store.SetIntentState(intentID, "paused"); err != nil {
 		t.Fatal(err)
 	}
@@ -145,27 +130,52 @@ func TestCancelIntentPreservesTokenMeteringWithoutDoubleCount(t *testing.T) {
 	if cleanup.Activities != 5 {
 		t.Fatalf("deleted activities=%d, want 5", cleanup.Activities)
 	}
-	total, err := store.TokenTotal()
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertTokenUsage(t, total, 60, 63, 66, 69)
-	afterCancelDaily, err := d.TokenDailyAll(30)
-	if err != nil {
-		t.Fatal(err)
-	}
-	afterCancel := dailyTokenBuckets(afterCancelDaily)
-	assertDailyTokenDelta(t, afterCancel, baseline, authoritativeDay, 10, 11, 12)
-	assertDailyTokenDelta(t, afterCancel, baseline, fallbackDay, 20, 21, 22)
-	assertDailyTokenDelta(t, afterCancel, baseline, trailingDay, 30, 31, 32)
-	assertDailyTokenDelta(t, afterCancel, baseline, now, 0, 0, 0)
 
-	sessions, err := store.TokenStatsBySession()
-	if err != nil {
-		t.Fatal(err)
+	// Cancelling deletes the intent's activity rows, so the only surviving trace of
+	// the tokens it burned is the dated token-ledger rollup — one row per token day,
+	// carrying exactly the day's metered spend.
+	type rollup struct {
+		day                     string
+		input, output, read, wr int
 	}
-	if len(sessions) != 0 {
-		t.Fatalf("cancelled intent leaked into sessions: %+v", sessions)
+	loadRollups := func() map[string]rollup {
+		t.Helper()
+		rows, queryErr := d.Query(`SELECT to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD'),
+			COALESCE(input_tokens,0), COALESCE(output_tokens,0),
+			COALESCE(cache_read_tokens,0), COALESCE(cache_write_tokens,0)
+			FROM activity
+			WHERE exploration_id=$1 AND worker='token-ledger' AND kind='result'
+			  AND metadata->>'cancelled_intent_id'=$2`, expID, fmt.Sprint(intentID))
+		if queryErr != nil {
+			t.Fatal(queryErr)
+		}
+		defer rows.Close()
+		out := map[string]rollup{}
+		for rows.Next() {
+			var item rollup
+			if scanErr := rows.Scan(&item.day, &item.input, &item.output, &item.read, &item.wr); scanErr != nil {
+				t.Fatal(scanErr)
+			}
+			out[item.day] = item
+		}
+		if rowsErr := rows.Err(); rowsErr != nil {
+			t.Fatal(rowsErr)
+		}
+		return out
+	}
+	day := func(at time.Time) string { return at.UTC().Format(time.DateOnly) }
+	afterCancel := loadRollups()
+	if len(afterCancel) != 3 {
+		t.Fatalf("token rollups = %+v, want one row per consumed day", afterCancel)
+	}
+	for _, want := range []rollup{
+		{day: day(authoritativeDay), input: 10, output: 11, read: 12, wr: 13},
+		{day: day(fallbackDay), input: 20, output: 21, read: 22, wr: 23},
+		{day: day(trailingDay), input: 30, output: 31, read: 32, wr: 33},
+	} {
+		if got := afterCancel[want.day]; got != want {
+			t.Fatalf("rollup for %s = %+v, want %+v", want.day, got, want)
+		}
 	}
 	var rollups, datedRollups int
 	if err := d.QueryRow(`SELECT COUNT(*), COUNT(*) FILTER (
@@ -181,47 +191,14 @@ func TestCancelIntentPreservesTokenMeteringWithoutDoubleCount(t *testing.T) {
 	if _, err := store.CancelIntent(intentID); err == nil {
 		t.Fatal("second cancellation unexpectedly succeeded")
 	}
-	afterRetry, err := store.TokenTotal()
-	if err != nil {
-		t.Fatal(err)
+	// Re-cancelling must not write a second rollup: the ledger keeps its total.
+	afterRetry := loadRollups()
+	if len(afterRetry) != len(afterCancel) {
+		t.Fatalf("rollups changed after retry: got=%+v want=%+v", afterRetry, afterCancel)
 	}
-	assertTokenUsage(t, afterRetry, 60, 63, 66, 69)
-	afterRetryDaily, err := d.TokenDailyAll(30)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertDailyTokenBucketsEqual(t, dailyTokenBuckets(afterRetryDaily), afterCancel)
-}
-
-func dailyTokenBuckets(items []DailyTokenBucket) map[string]DailyTokenBucket {
-	out := make(map[string]DailyTokenBucket, len(items))
-	for _, item := range items {
-		out[item.Day] = item
-	}
-	return out
-}
-
-func assertDailyTokenDelta(t *testing.T, got, baseline map[string]DailyTokenBucket, at time.Time, input, output, read int) {
-	t.Helper()
-	day := at.UTC().Format(time.DateOnly)
-	actual, initial := got[day], baseline[day]
-	if actual.InputTokens-initial.InputTokens != input ||
-		actual.OutputTokens-initial.OutputTokens != output ||
-		actual.CacheReadTokens-initial.CacheReadTokens != read {
-		t.Fatalf("token delta for %s = input:%d output:%d cache-read:%d, want %d/%d/%d",
-			day, actual.InputTokens-initial.InputTokens, actual.OutputTokens-initial.OutputTokens,
-			actual.CacheReadTokens-initial.CacheReadTokens, input, output, read)
-	}
-}
-
-func assertDailyTokenBucketsEqual(t *testing.T, got, want map[string]DailyTokenBucket) {
-	t.Helper()
-	if len(got) != len(want) {
-		t.Fatalf("daily token buckets changed after retry: got=%+v want=%+v", got, want)
-	}
-	for day, expected := range want {
-		if actual, ok := got[day]; !ok || actual != expected {
-			t.Fatalf("daily token bucket %s changed after retry: got=%+v want=%+v", day, actual, expected)
+	for key, want := range afterCancel {
+		if got := afterRetry[key]; got != want {
+			t.Fatalf("rollup %s changed after retry: got=%+v want=%+v", key, got, want)
 		}
 	}
 }

@@ -146,6 +146,33 @@ jobs:
           done
           sha256sum *.zip > SHA256SUMS
           sha256sum --check SHA256SUMS
+      - name: Collect release notes from CHANGELOG
+        working-directory: dist
+        run: |
+          version="${RELEASE_TAG#v}"
+          # 版本正文以 CHANGELOG 的本版本小节为准（用户要求：Release 说明必须写清该版本改了什么，
+          # 不用 GitHub 自动生成的 PR 列表）。取 `## [x.y.z]` 到下一个 `## [` 之间的内容。
+          awk -v v="$version" '
+            /^## \[/ {
+              if (found) exit
+              if (index($0, "[" v "]") > 0) { found = 1; next }
+            }
+            found { print }
+          ' ../CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "CHANGELOG.md 里没有 [$version] 小节，拒绝发布空正文" >&2
+            exit 1
+          fi
+          cat >> release-notes.md <<'EOF'
+
+          ---
+
+          镜像（GHCR）：`ghcr.io/${{ github.repository_owner }}/artex:${{ needs.prepare.outputs.tag }}`，同时提供 `latest`。
+          支持 Linux AMD64 / ARM64，Docker 会自动选择宿主机架构。
+          程序包提供 Linux、macOS 的 AMD64 / ARM64 及 Windows AMD64，并附 SHA256SUMS。
+          部署和在线更新说明见本仓库 README。
+          EOF
+          head -5 release-notes.md
       - name: Replace release only when the tag moved to a new commit
         env:
           RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
@@ -174,12 +201,9 @@ jobs:
           files: |
             dist/*.zip
             dist/SHA256SUMS
-          generate_release_notes: true
-          body: |
-            镜像（GHCR）：`ghcr.io/${{ github.repository_owner }}/artex:${{ needs.prepare.outputs.tag }}`，同时提供 `latest`。
-            支持 Linux AMD64 / ARM64，Docker 会自动选择宿主机架构。
-            程序包提供 Linux、macOS 的 AMD64 / ARM64 及 Windows AMD64，并附 SHA256SUMS。
-            部署和在线更新说明见本仓库 README。
+          # 正文来自上一步从 CHANGELOG 抽出的小节，不用自动生成的 PR 列表。
+          body_path: dist/release-notes.md
+          generate_release_notes: false
       - name: Publish complete release
         run: gh release edit "$RELEASE_TAG" --draft=false --latest
 

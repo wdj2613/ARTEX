@@ -846,10 +846,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/exploration/main-session/new", s.newMainSession)
 	mux.HandleFunc("GET /api/exploration/activity/stream", s.streamActivity)
 	mux.HandleFunc("GET /api/exploration/activity/{seq}", s.activityDetail)
-	mux.HandleFunc("GET /api/exploration/tokens", s.tokenStats)
-	mux.HandleFunc("GET /api/tokens/daily", s.tokenDailyStats)
-	mux.HandleFunc("GET /api/tokens/conversations", s.conversationTokens)
-	mux.HandleFunc("GET /api/tokens/usage", s.pgUsageStats) // 全局 llm_usage 聚合（仪表盘新版视图）
+	mux.HandleFunc("GET /api/exploration/tokens", s.tokenStats) // 单任务 token（llm_usage 台账）
+	mux.HandleFunc("GET /api/tokens/usage", s.pgUsageStats)     // 全局 llm_usage 聚合（仪表盘唯一 token 口径）
 
 	mux.HandleFunc("GET /api/audit", s.getAudit)
 	mux.HandleFunc("POST /api/gc", s.gc)
@@ -2958,8 +2956,11 @@ func (s *Server) activityHistory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// tokenStats returns per-worker token usage (input/output/cache read/write) for a
-// task — main agent, planner, and each work#N.
+// tokenStats returns a task's token usage (input/output/cache read/write) from the
+// always-on llm_usage ledger: per agent lane, per session (main:<seg> / plan /
+// intent:<id>, the keys the task-detail UI uses), and the whole-task total. The
+// ledger is the single token source — activity rows only carry live-display
+// snapshots, so nothing here depends on activity history or pagination.
 func (s *Server) tokenStats(w http.ResponseWriter, r *http.Request) {
 	t := s.m.ResolveTask(r.URL.Query().Get("task"))
 	if t == nil {
@@ -2970,57 +2971,12 @@ func (s *Server) tokenStats(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	stats, err := t.Store.TokenStatsByWorker()
+	workers, sessions, total, err := t.Store.TokenStatsFromUsage()
 	if err != nil {
 		writeErr(w, 500, err.Error())
 		return
 	}
-	sessions, err := t.Store.TokenStatsBySession()
-	if err != nil {
-		writeErr(w, 500, err.Error())
-		return
-	}
-	total, err := t.Store.TokenTotal() // whole-task total (all agents)
-	if err != nil {
-		writeErr(w, 500, err.Error())
-		return
-	}
-	writeJSON(w, 200, map[string]any{"workers": stats, "sessions": sessions, "total": tokenTotalDTO(total)})
-}
-
-// tokenDailyStats returns global token consumption aggregated by calendar day
-// (UTC) across all tasks for the past ?days=N days (default 30).
-func (s *Server) tokenDailyStats(w http.ResponseWriter, r *http.Request) {
-	days := atoiDefault(r.URL.Query().Get("days"), 30)
-	if s.m.pg == nil {
-		writeJSON(w, 200, []any{})
-		return
-	}
-	buckets, err := s.m.pg.TokenDailyAll(days)
-	if err != nil {
-		writeErr(w, 500, err.Error())
-		return
-	}
-	if buckets == nil {
-		buckets = []db.DailyTokenBucket{}
-	}
-	writeJSON(w, 200, buckets)
-}
-
-// conversationTokens returns per-conversation token summaries so the dashboard can
-// merge chat (conversation) usage into its per-profile / daily token stats — which
-// otherwise count only task (exploration) usage.
-func (s *Server) conversationTokens(w http.ResponseWriter, r *http.Request) {
-	if s.m.pg == nil {
-		writeJSON(w, 200, []any{})
-		return
-	}
-	rows, err := s.m.pg.ConversationTokenSummaries()
-	if err != nil {
-		writeErr(w, 500, err.Error())
-		return
-	}
-	writeJSON(w, 200, rows)
+	writeJSON(w, 200, map[string]any{"workers": workers, "sessions": sessions, "total": tokenTotalDTO(total)})
 }
 
 // streamActivity is the live SSE tail: it replays history after ?since=<seq>, then

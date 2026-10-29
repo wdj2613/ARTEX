@@ -73,6 +73,9 @@ func TestTaskListMetricsAll(t *testing.T) {
 		t.Skipf("postgres unavailable (%v) - skipping", err)
 	}
 	defer d.Close()
+	if err := d.EnsureLLMUsageTable(); err != nil {
+		t.Fatal(err)
+	}
 
 	task, err := d.CreateTask("task-list-metrics", "goal", nil, 0, 0)
 	if err != nil {
@@ -80,15 +83,24 @@ func TestTaskListMetricsAll(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = d.DeleteTask(task.ID) })
 
-	resultAt := time.Now().Add(-time.Second).Truncate(time.Second)
-	latestAt := resultAt.Add(time.Second)
+	latestAt := time.Now().Add(-time.Second).Truncate(time.Second)
+	// Token metrics come from the llm_usage ledger, not from activity rows: an
+	// activity row carrying tokens must no longer contribute.
 	if _, err := d.Exec(`
 INSERT INTO activity(
     exploration_id, kind, input_tokens, output_tokens,
     cache_read_tokens, cache_write_tokens, created_at
-) VALUES ($1,'result',11,7,3,2,$2), ($1,'tool_result',999,999,999,999,$3)`,
-		task.ExplorationID, resultAt, latestAt); err != nil {
+) VALUES ($1,'result',999,999,999,999,$2)`, task.ExplorationID, latestAt); err != nil {
 		t.Fatal(err)
+	}
+	for _, usage := range []LLMUsage{
+		{TaskID: fmt.Sprint(task.ID), ExplorationID: task.ExplorationID, Session: fmt.Sprintf("exp%d-main", task.ExplorationID), Worker: "main", Model: "m", InputTokens: 11, OutputTokens: 7, CacheRead: 3, CacheWrite: 2, Status: "ok"},
+		{TaskID: fmt.Sprint(task.ID), ExplorationID: task.ExplorationID, Session: fmt.Sprintf("exp%d-planner", task.ExplorationID), Worker: "planner", Model: "m", InputTokens: 5, OutputTokens: 1, CacheRead: 2, CacheWrite: 0, Status: "ok"},
+	} {
+		usage := usage
+		if err := d.InsertLLMUsage(&usage); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := d.Exec(`
 INSERT INTO exploration_nodes(exploration_id, kind, payload, state)
@@ -104,8 +116,8 @@ VALUES ($1,'goal','{}','met'), ($1,'goal','{}','open')`, task.ExplorationID); er
 	if !ok {
 		t.Fatalf("metrics for exploration %d missing", task.ExplorationID)
 	}
-	if metrics.Tokens.InputTokens != 11 || metrics.Tokens.OutputTokens != 7 ||
-		metrics.Tokens.CacheReadTokens != 3 || metrics.Tokens.CacheWriteTokens != 2 {
+	if metrics.Tokens.InputTokens != 16 || metrics.Tokens.OutputTokens != 8 ||
+		metrics.Tokens.CacheReadTokens != 5 || metrics.Tokens.CacheWriteTokens != 2 {
 		t.Fatalf("unexpected token metrics: %+v", metrics.Tokens)
 	}
 	if metrics.LastActivity != latestAt.Unix() {
@@ -113,5 +125,44 @@ VALUES ($1,'goal','{}','met'), ($1,'goal','{}','open')`, task.ExplorationID); er
 	}
 	if metrics.Goals.Total != 2 || metrics.Goals.Met != 1 {
 		t.Fatalf("unexpected goal metrics: %+v", metrics.Goals)
+	}
+}
+
+// An archived task has its detail rows (activity + llm_usage) extracted into the cold
+// archive, so the live ledger is empty for it. The list must fall back to the archive
+// manifest's aggregate instead of reporting that the task spent nothing.
+func TestTaskListMetricsAllUsesArchivedTokenAggregate(t *testing.T) {
+	d, err := Open(testDSN(t))
+	if err != nil {
+		t.Skipf("postgres unavailable (%v) - skipping", err)
+	}
+	defer d.Close()
+	if err := d.EnsureLLMUsageTable(); err != nil {
+		t.Fatal(err)
+	}
+
+	task, err := d.CreateTask("task-list-archived", "goal", nil, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.DeleteTask(task.ID) })
+
+	if _, err := d.Exec(`
+INSERT INTO task_archives(task_id, state, aggregate_stats)
+VALUES ($1,'ready', $2::jsonb)`, task.ID, `{"tokens":{"calls":42,"input_tokens":700,"output_tokens":90,"cache_read_tokens":500,"cache_write_tokens":12}}`); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := d.TaskListMetricsAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics, ok := all[task.ExplorationID]
+	if !ok {
+		t.Fatalf("metrics for exploration %d missing", task.ExplorationID)
+	}
+	if metrics.Tokens.InputTokens != 700 || metrics.Tokens.OutputTokens != 90 ||
+		metrics.Tokens.CacheReadTokens != 500 || metrics.Tokens.CacheWriteTokens != 12 {
+		t.Fatalf("archived token metrics = %+v, want the manifest aggregate", metrics.Tokens)
 	}
 }
