@@ -156,13 +156,27 @@ jobs:
           version="${RELEASE_TAG#v}"
           # 版本正文以 CHANGELOG 的本版本小节为准（用户要求：Release 说明必须写清该版本改了什么，
           # 不用 GitHub 自动生成的 PR 列表）。取 `## [x.y.z]` 到下一个 `## [` 之间的内容。
+          # 版本小节里若写了 `### 概要`（一句话结论），Release 正文只用它——页面说明要简要直接，
+          # 机制细节留在 CHANGELOG 正文里。没有概要时才退回整段。
           awk -v v="$version" '
             /^## \[/ {
               if (found) exit
               if (index($0, "[" v "]") > 0) { found = 1; next }
             }
-            found { print }
+            !found { next }
+            /^### 概要[[:space:]]*$/ { summary = 1; next }
+            summary && /^### / { exit }
+            summary { print }
           ' ../CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            awk -v v="$version" '
+              /^## \[/ {
+                if (found) exit
+                if (index($0, "[" v "]") > 0) { found = 1; next }
+              }
+              found { print }
+            ' ../CHANGELOG.md > release-notes.md
+          fi
           if [ ! -s release-notes.md ]; then
             echo "CHANGELOG.md 里没有 [$version] 小节，拒绝发布空正文" >&2
             exit 1
