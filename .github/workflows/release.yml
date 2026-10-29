@@ -132,6 +132,10 @@ jobs:
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
     steps:
+      # 正文要从 CHANGELOG.md 抽，因此这个 job 自己也要取一次仓库（artifact 只带来 zip）。
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
       - uses: actions/download-artifact@v4
         with:
           pattern: pkg-*
