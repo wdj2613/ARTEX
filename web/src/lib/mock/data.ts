@@ -11,8 +11,6 @@ import type {
   Audit,
   Company,
   Conversation,
-  ConvTokenSummary,
-  DailyTokenBucket,
   Edge,
   Finding,
   FindingAsset,
@@ -2837,38 +2835,6 @@ export const tokenSessions: SessionTokenUsage[] = (() => {
 })();
 
 export const tokenTotal: TokenTotal = grandTotal;
-
-export const dailyTokens: DailyTokenBucket[] = Array.from({ length: 30 }, (_, i) => {
-  const d = new Date("2026-07-26T00:00:00Z");
-  d.setUTCDate(d.getUTCDate() - (29 - i));
-  const wave = 40000 + Math.round(30000 * Math.abs(Math.sin(i / 3)));
-  return {
-    date: d.toISOString().slice(0, 10),
-    input_tokens: wave,
-    output_tokens: Math.round(wave * 0.08),
-    cache_read_tokens: Math.round(wave * 0.7),
-    cache_write_tokens: Math.round(wave * 0.12),
-  };
-});
-
-export const convTokens: ConvTokenSummary[] = [
-  {
-    llm_profile_id: 1,
-    created_at: T("2026-07-25T10:00:00Z"),
-    input_tokens: 42000,
-    output_tokens: 3800,
-    cache_read_tokens: 26000,
-    cache_write_tokens: 5200,
-  },
-  {
-    llm_profile_id: 2,
-    created_at: T("2026-07-24T16:00:00Z"),
-    input_tokens: 18000,
-    output_tokens: 1600,
-    cache_read_tokens: 9000,
-    cache_write_tokens: 2100,
-  },
-];
 
 // ── Traffic ──────────────────────────────────────────────────────────────────
 const exchanges = [

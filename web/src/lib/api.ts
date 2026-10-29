@@ -25,11 +25,9 @@ import type {
   CompanyScopeMutation,
   CompanyScopeRule,
   Conversation,
-  ConvTokenSummary,
   CoverageAssetRefs,
   CoverageGraphData,
   CredentialTrafficDetail,
-  DailyTokenBucket,
   DeleteTaskOptions,
   DeleteTaskResult,
   Edge,
@@ -810,11 +808,6 @@ export const api = {
       sessions: arr(r.sessions),
       total: r.total,
     })),
-  tokenDaily: (days = 30) => get<DailyTokenBucket[]>(`/tokens/daily?days=${days}`).then(arr),
-  conversationTokens: () =>
-    get<ConvTokenSummary[]>("/tokens/conversations")
-      .then(arr)
-      .catch(() => [] as ConvTokenSummary[]),
   explorationGraph: (task?: string) => get<{ nodes: TaskNode[]; edges: Edge[] }>(`/exploration/graph${tq(task)}`),
   // 播报板:服务端按创建顺序分页的探索节点(默认最新在前)。
   explorationNodes: (task: string, query: ExplorationNodeQuery = {}) => {

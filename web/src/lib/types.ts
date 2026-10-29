@@ -820,15 +820,6 @@ export interface LogLine {
 export type SessionRole = "mainagent" | "planner" | "worker" | "system";
 export type SessionStatus = "running" | "paused" | "done" | "blocked" | "exhausted" | "pending" | "stopped" | "deleted";
 
-// Daily token aggregate bucket (GET /api/tokens/daily).
-export interface DailyTokenBucket {
-  date: string; // "YYYY-MM-DD"
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  cache_write_tokens: number;
-}
-
 // Per-worker token usage (GET /api/exploration/tokens).
 export interface TokenUsage {
   worker: string;
@@ -893,6 +884,9 @@ export interface ProfileDayUsage {
 export interface UsageStats {
   by_profile: ProfileUsage[];
   daily: ProfileDayUsage[];
+  // Distinct tasks the ledger covers, live rows plus cold archives. Summing
+  // by_profile's per-profile task counts would count a task once per profile.
+  tasks: number;
 }
 
 // Per-model token usage for one task (GET /api/llm/records/by-model), from the
@@ -1460,17 +1454,6 @@ export interface SSTask {
   progress?: number;
   creatTime?: string;
   endTime?: string;
-}
-
-// ConvTokenSummary — one conversation's token total (+ profile/date) for merging
-// chat usage into the dashboard token stats. GET /api/tokens/conversations.
-export interface ConvTokenSummary {
-  llm_profile_id: number | null;
-  created_at: string;
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  cache_write_tokens: number;
 }
 
 // ---- Command recording (Bash execution history) ----

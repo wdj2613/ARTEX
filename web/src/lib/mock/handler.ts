@@ -1671,9 +1671,10 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     return { ok: true };
   }
 
-  // ── 全局 llm_usage 聚合（仪表盘新版视图，demo）──
+  // ── 全局 llm_usage 聚合（仪表盘唯一 token 口径，demo）──
   if (path === "/tokens/usage")
     return {
+      tasks: 4,
       by_profile: [
         {
           profile_name: "default",
@@ -2360,8 +2361,6 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
     const a = mockActivity.find((x) => x.seq === Number(seg[2]));
     return { detail: a?.detail ?? a?.summary ?? "" };
   }
-  if (path === "/tokens/daily") return D.dailyTokens;
-  if (path === "/tokens/conversations") return D.convTokens;
 
   // ── traffic / audit / settings ──
   if (path === "/audit") return D.audit;
