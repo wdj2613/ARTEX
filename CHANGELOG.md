@@ -67,35 +67,19 @@
 - **手机端「任务 → 发现」列表的标签重叠**：行容器是 `flex`（不换行），严重度标签与「流量证据 N 条」标签虽为 `whitespace-nowrap` 却仍是默认 `flex-shrink: 1`，390px 视口下被压到文字宽度以下，造成字体重叠。改为外层 `flex-wrap` + 两个标签 `shrink-0`；「流量证据」前缀在 `sm` 以下隐藏、只留「N 条」省宽度，桌面端文案不变。
 - **手机端「发现详情」页内容被裁切**：概览区 `grid gap-4 lg:grid-cols-3` 未声明窄屏列，隐式列按 `auto`（= max-content）被内容撑到 **786px**，而容器仅 326px，导致 130 个元素超出视口右边界被硬切。改为显式 `grid-cols-1`（`minmax(0,1fr)`）+ 子项 `min-w-0`；摘要与证据块的 `whitespace-pre-wrap` 补 `break-words [overflow-wrap:anywhere]`，长 URL / 无空格串不再撑宽。
 
-## [0.4.0] - 2026-10-28
-
-### 合并
-
-#### 新增的功能
-
-- **并入 RuoJi6/ARTEX 的 150 个提交**（共同分叉点 `e6ec569`，0.3.15）：多模型 Worker 池（按 LLM 配置分配并发会话）、按 LLM profile 独立限流（配额历史跨 provider 缓存失效保留）、凭据处理（依赖开关 + 流量证据）、任务情报记录与视图、Burp 风格 Repeater 请求重放、Agent 任务名与对话标题自动生成、发现页严重度筛选与排序、计划任务日历式改造与检索分页、任务/计划备注、全局代理连通性测试与出口 IP 显示、拦截审批改进（默认人工审批、模型判失败重试三次、审批历史按内容与日期检索）、Go 1.26.10，以及更完善的 release 流程（native amd64/arm64 runner 真实启动测试 + 健康检查、manifest 架构校验、tag 移动时允许重发）。
-- **完整保留本 fork 的独有改进**：跨任务知识检索（`knowledge_queries`）、压缩健壮性（块上限/失败二分/指数退避/先建后删）、渗透工具链与内置字典/nuclei 模板、工具箱提示词纪律、移动端适配（`dvh`、播报板竖排）、自更新指向本 fork + GHCR 零配置发布。
-
-#### 修复的问题
-
-- **12 个冲突文件人工解决**：`release.yml` 采用上游更完善的流程但推送目标保持 GHCR（`ghcr.io/<owner>/artex`，`packages: write`），并删掉依赖 Vercel 的 demo job；`selfupdate` 的 `Repo` 保持 `wdj2613/ARTEX`（否则自更新会装成别人的版本）；`README` 按项目约定保持原样；`Dockerfile` 保留工具链并采纳 Node 22；`db/schema.sql` 以上游全文为基线补回我们的 `knowledge_queries`（此前拼接截断导致 `syntax error at or near "CREATE"`）；`server/server.go` 与 `server/assembly.go` 合并双方设置项；web 三处保留我们的 `dvh`/响应式列并采纳上游新功能。
-- **确认无新增测试失败**：`agent` 包 `TestGraphOverviewExpandsAssociatedCompanyScope`、`TestCaptureApprovalLifecycle` 与 `db` 包 `TestInterceptApprovalFilters`、`TestSideTaskArchiveVersions` 在合并前/RuoJi6 原仓库同样失败，属上游既有问题；其余 12 个包全绿（`server` 包 109s 全过）。
-- **修复 release 流程的镜像名校验**：上游 `prepare` 步骤的正则只接受 Docker Hub 的 `<owner>/<image>` 形式，改成 GHCR 后 `ghcr.io/<owner>/artex` 带两级斜杠会被判为非法，导致 `Validate release version` 失败、整条发布流水线中止（v0.4.0 首次推送即命中）。正则改为允许可选 registry 前缀，并明确要求全小写（GHCR 硬性要求）。
-
-
 ## [0.3.23] - 2026-10-28
 
 ### 自更新
 
 #### 修复的问题
 
-- **发布源指向本 fork**：`selfupdate` 的 `Repo` 原为上游 `Autumn-27/artex`，而该仓库已不存在（实测 GitHub API 返回 404），设置页「版本与更新」点检查更新必然失败并提示「仓库尚未发布任何正式版本」。现改为 `wdj2613/ARTEX`，并补注释说明发布方式：推 `v*` tag 后由 `release.yml` 自动构建五平台包、生成 `SHA256SUMS` 并创建 Release。资产命名两侧本就对齐（`AssetName` 与 `build.sh` 都去掉 tag 的 `v` 前缀，`artex-<版本>-<os>-<arch>.zip`）。
+- **发布源指向本仓库**：`selfupdate` 的 `Repo` 原值指向一个已不存在的仓库（实测 GitHub API 返回 404），设置页「版本与更新」点检查更新必然失败并提示「仓库尚未发布任何正式版本」。现改为 `wdj2613/ARTEX`，并补注释说明发布方式：推 `v*` tag 后由 `release.yml` 自动构建五平台包、生成 `SHA256SUMS` 并创建 Release。资产命名两侧本就对齐（`AssetName` 与 `build.sh` 都去掉 tag 的 `v` 前缀，`artex-<版本>-<os>-<arch>.zip`）。
 
 ### CI
 
 #### 修复的问题
 
-- **release 工作流的镜像 job 改推 GHCR**：原 `docker` job 推 Docker Hub `autumn27/artex`，依赖 `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` 两个 secrets，fork 里没有这两个值，导致每次推 tag 都留一个永久失败的 job。改为 `ghcr.io/${{ github.repository }}`，用内置 `GITHUB_TOKEN` 并新增 `packages: write` 权限，fork 无需任何额外配置即可全绿。
+- **release 工作流的镜像 job 改推 GHCR**：原 `docker` job 推 Docker Hub 且依赖 `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` 两个 secrets，本仓库没有这两个值，导致每次推 tag 都留一个永久失败的 job。改为 `ghcr.io/${{ github.repository }}`，用内置 `GITHUB_TOKEN` 并新增 `packages: write` 权限，本仓库无需任何额外配置即可全绿。
 
 ## [0.3.22] - 2026-10-28
 
