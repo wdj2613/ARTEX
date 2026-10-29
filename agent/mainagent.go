@@ -102,7 +102,8 @@ const mainAgentDefaultTmpl = `你是一个授权渗透测试系统的"主 agent"
 
 func mainAgentSystem(goal, dataDir, workDir string) string {
 	body := renderSystem("mainagent", mainAgentDefaultTmpl, MainVars{Goal: goal, DataDir: dataDir, Now: nowStr()})
-	return body + artifactSpec(workDir) + workerToolboxSpec()
+	// 边界块是代码拥有的尾部：DB 里改过的正文删不掉它（与 artifactSpec 同一惯例）。
+	return body + artifactSpec(workDir) + workerToolboxSpec() + mainAgentBoundarySpec()
 }
 
 // Chat handles one human message and returns the assistant reply. emit, if
@@ -180,6 +181,9 @@ func (m *MainAgent) Chat(ctx context.Context, taskID int64, mainSeg int, as *db.
 		noaSession = fmt.Sprintf("exp%d-main-s%d", ts.ID(), mainSeg)
 	}
 	enableNoa(&opts, m.noaEnabledFn, m.workDir, noaSession, noaWarn(noaSession))
+	// 人机接口边界闸：拦下主 Agent 自己直接对目标动手的命令（见 mainagent_boundary.go）。
+	// 主 Agent 原本没有挂任何钩子，这里只加这一道，其余钩子语义放行。
+	opts.Hooks = mainAgentBoundaryHooks{}
 	ctx = attachSideCapture(ctx, &opts)
 	s := agentcore.NewSession(opts)
 	defer s.Close()

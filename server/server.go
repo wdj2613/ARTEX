@@ -3446,6 +3446,8 @@ func (s *Server) settingsPayload() map[string]any {
 		"agent_traffic_binding": s.m.pg.GetBool(settingAgentTrafficBinding, false),
 		// add_intent 近似去重闸：off / warn（默认）/ block，见 agent/intent_dedup.go
 		"agent_intent_dedup": intentDedupModeOf(func() (string, bool, error) { return s.m.pg.GetSetting(settingAgentIntentDedup) }),
+		// 主 Agent 边界闸力度：off / warn（默认）/ block，见 agent/mainagent_boundary.go
+		"mainagent_direct_action": mainAgentDirectActionOf(func() (string, bool, error) { return s.m.pg.GetSetting(settingMainAgentDirectAction) }),
 		// 跨任务知识检索：是否开放 + 每任务关键词额度（默认 6）
 		"agent_knowledge_search": s.m.pg.GetBool(settingAgentKnowledgeSearch, true),
 		"agent_knowledge_query_budget": knowledgeQueryBudgetOf(func() (string, bool, error) {
@@ -3553,6 +3555,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		LLMPoolBindFallback *bool `json:"llm_pool_bind_fallback"`
 		// 意图近似去重闸模式(off/warn/block);每次 add_intent 读一次,即时生效。
 		AgentIntentDedup *string `json:"agent_intent_dedup"`
+		// 主 Agent 边界闸力度(off/warn/block);每次工具调用读一次,即时生效。
+		MainAgentDirectAction *string `json:"mainagent_direct_action"`
 		// 跨任务知识检索开关 + 每任务关键词额度（1..50，默认 6）。即时生效。
 		AgentKnowledgeSearch      *bool `json:"agent_knowledge_search"`
 		AgentKnowledgeQueryBudget *int  `json:"agent_knowledge_query_budget"`
@@ -3580,6 +3584,19 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.m.pg.SetSetting(settingAgentIntentDedup, mode); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if req.MainAgentDirectAction != nil {
+		mode := strings.ToLower(strings.TrimSpace(*req.MainAgentDirectAction))
+		switch mode {
+		case "off", "warn", "block":
+		default:
+			writeErr(w, 400, "mainagent_direct_action 只能是 off / warn / block")
+			return
+		}
+		if err := s.m.pg.SetSetting(settingMainAgentDirectAction, mode); err != nil {
 			writeErr(w, 500, err.Error())
 			return
 		}

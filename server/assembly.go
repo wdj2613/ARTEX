@@ -217,6 +217,10 @@ func wireTools(pg *db.DB, domainReg map[string]actool.CoreTool) {
 	agent.IntentDedupMode = func() string {
 		return intentDedupModeOf(func() (string, bool, error) { return pg.GetSetting(settingAgentIntentDedup) })
 	}
+	// 主 Agent 边界闸的力度：off / warn（默认）/ block。每次工具调用读一次 settings。
+	agent.MainAgentDirectActionMode = func() string {
+		return mainAgentDirectActionOf(func() (string, bool, error) { return pg.GetSetting(settingMainAgentDirectAction) })
+	}
 	// 跨任务知识检索：开关与每任务关键词额度，每次调用读一次 settings，改配置即时生效。
 	agent.KnowledgeSearchEnabled = func() bool { return pg.GetBool(settingAgentKnowledgeSearch, true) }
 	agent.KnowledgeQueryBudget = func() int {

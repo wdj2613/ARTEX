@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+### Agent
+
+#### 新增的功能
+
+- **主 Agent 边界闸（`mainagent_direct_action`）**：主 Agent 是人类操作员的接口——回答问题、把人的要求转成目标（`set_goals` / `add_intent` / `steer_work`），执行交给规划者与 worker；但它的工具面挂着含 Bash 的默认工具集，实测会在收到「继续任务，已设好全局代理」后自己下场 27 分 44 秒、51 轮、60 次 Bash（几乎全是 curl / DNS / 验源站），一个回合烧掉 67.8M 输入 token 且零正文输出。提示词只能劝，所以在主 Agent 会话上新增 `PreToolUse` 钩子（`agent/mainagent_boundary.go`）：按 shell 段切词判定「自己直接对目标动手」的命令形态（网络客户端、扫描器、DNS/连通性探测、脚本内的出网调用），命中即拦下该次调用，并把替代通道（`add_intent` / `steer_work` / `set_goals` / `get_worker_output`）写回给模型。判定不只看段首词，`sudo -u … curl`、`cat urls | xargs -n1 nmap` 也能命中；段首是本地查看类命令（`grep` / `cat` / `jq` / `git` …）的段直接跳过，避免「`grep -o "https://…" run.log`」这类读日志操作被误伤。
+- **提示词尾部新增代码拥有的「人机接口边界」段**：回答优先（先给一到三句人话再动手）、被问到项目现状时只用只读平台工具回答（不为回答去连目标）、被下达要求时翻译成项目目标、自己不直接对目标动手。它追加在渲染后的正文之后，DB 里改过的提示词正文删不掉（与 `artifactSpec` / `workerToolboxSpec` 同一惯例），并有单测锁住。
+- **系统设置新增「主 Agent 边界闸」卡片**：三档 `仅提醒（默认）` / `收紧 Bash` / `关闭边界闸`，保存即时生效（每次工具调用读一次 settings）；`收紧 Bash` 在拦截之上把主 Agent 的 Bash 收窄为本任务目录内的只读查看命令白名单。归一化规则：未配置、读库出错、写错值一律回 `warn`，不允许配置缺失把闸悄悄关掉。
+
 ### Web
 
 #### 删除的功能

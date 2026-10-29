@@ -275,6 +275,12 @@ func intentDedupModeOf(get func() (value string, ok bool, err error)) string {
 	return "warn"
 }
 
+// mainAgentDirectActionOf 归一化主 Agent 边界闸的力度，取值与缺省规则同去重闸：
+// 缺省 / 读库出错 / 写错值一律回 warn（宁可能跑，也不能把闸悄悄关掉）。
+func mainAgentDirectActionOf(get func() (value string, ok bool, err error)) string {
+	return intentDedupModeOf(get)
+}
+
 // knowledgeQueryBudgetOf 归一化跨任务检索的关键词额度：缺省、读库失败、非正数都回默认 6，
 // 上限夹到 50（再多就等于没有约束，上下文成本会失控）。get 传入是为了免 DB 单测。
 func knowledgeQueryBudgetOf(get func() (value string, ok bool, err error)) int {
@@ -301,6 +307,10 @@ const (
 	// off / warn (default: create + warn) / block (refuse while a duplicate is
 	// still live). See agent/intent_dedup.go.
 	settingAgentIntentDedup = "agent_intent_dedup"
+	// settingMainAgentDirectAction 控制主 Agent「人机接口边界」闸的力度：off / warn / block。
+	// 它决定主 Agent 能不能自己直接对目标发请求/扫描——设计上不该做，那 27 分钟 60 次 Bash
+	// 就是没有这道闸的后果（见 agent/mainagent_boundary.go）。
+	settingMainAgentDirectAction = "mainagent_direct_action"
 	// settingAgentKnowledgeSearch 控制跨任务知识检索（search_knowledge）是否开放。
 	// 默认开：只读、不改变既有工具行为，价值在复用别的任务验证过的结论与手法。
 	settingAgentKnowledgeSearch = "agent_knowledge_search"

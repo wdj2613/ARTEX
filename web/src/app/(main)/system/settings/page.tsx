@@ -41,6 +41,28 @@ const INTENT_DEDUP_OPTIONS = [
   },
 ];
 
+// 主 Agent 边界闸的力度选项：默认 warn（拦下自己动手的命令 + 写回替代做法）。
+const MAINAGENT_BOUNDARY_OPTIONS = [
+  {
+    value: "warn" as const,
+    label: "仅提醒（默认）",
+    hint: "主 Agent 想自己 curl / 扫描目标时，拦下这条命令并把「改用 add_intent / steer_work 派给 worker」写回给它。",
+    saved: "已切换为仅提醒",
+  },
+  {
+    value: "block" as const,
+    label: "收紧 Bash",
+    hint: "在拦截之上，主 Agent 的 Bash 只放行本任务目录内的只读查看命令（cat / grep / jq 之类），其余一律拒绝。",
+    saved: "已收紧主 Agent 的 Bash",
+  },
+  {
+    value: "off" as const,
+    label: "关闭边界闸",
+    hint: "主 Agent 可以自己直接对目标发请求。仅在明确要它亲自下场时使用。",
+    saved: "已关闭主 Agent 边界闸",
+  },
+];
+
 export default function SystemSettingsPage() {
   const [credentialAgent, setCredentialAgent] = React.useState(false);
   const [credentialBinding, setCredentialBinding] = React.useState(false);
@@ -53,6 +75,8 @@ export default function SystemSettingsPage() {
   const [agentTrafficBinding, setAgentTrafficBinding] = React.useState(false);
   // add_intent 近似去重闸的力度（off/warn/block），默认 warn。
   const [intentDedup, setIntentDedup] = React.useState<"off" | "warn" | "block">("warn");
+  // 主 Agent 边界闸力度（off/warn/block），默认 warn。
+  const [mainAgentBoundary, setMainAgentBoundary] = React.useState<"off" | "warn" | "block">("warn");
   const [knowledgeSearch, setKnowledgeSearch] = React.useState(true);
   const [knowledgeBudget, setKnowledgeBudget] = React.useState(6);
   const [budgetDraft, setBudgetDraft] = React.useState("6");
@@ -107,6 +131,7 @@ export default function SystemSettingsPage() {
     setTrafficCapture(!!s.traffic_capture);
     setAgentTrafficBinding(!!s.agent_traffic_binding);
     setIntentDedup((s.agent_intent_dedup as "off" | "warn" | "block") || "warn");
+    setMainAgentBoundary((s.mainagent_direct_action as "off" | "warn" | "block") || "warn");
     setKnowledgeSearch(s.agent_knowledge_search !== false);
     const budget = typeof s.agent_knowledge_query_budget === "number" ? s.agent_knowledge_query_budget : 6;
     setKnowledgeBudget(budget);
@@ -273,6 +298,23 @@ export default function SystemSettingsPage() {
       })
       .catch((e) => {
         setIntentDedup(prev);
+        toast.error(`保存失败：${(e as Error).message}`);
+      })
+      .finally(() => setSaving(false));
+  };
+
+  const saveMainAgentBoundary = (v: "off" | "warn" | "block") => {
+    const prev = mainAgentBoundary;
+    setMainAgentBoundary(v); // optimistic
+    setSaving(true);
+    api
+      .setSettings({ mainagent_direct_action: v })
+      .then((s) => {
+        apply(s);
+        toast.success(MAINAGENT_BOUNDARY_OPTIONS.find((o) => o.value === v)?.saved ?? "已保存");
+      })
+      .catch((e) => {
+        setMainAgentBoundary(prev);
         toast.error(`保存失败：${(e as Error).message}`);
       })
       .finally(() => setSaving(false));
@@ -601,6 +643,46 @@ export default function SystemSettingsPage() {
               </SelectTrigger>
               <SelectContent>
                 {INTENT_DEDUP_OPTIONS.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </CardContent>
+        </Card>
+
+        <Card className="mb-4 break-inside-avoid md:mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <KeyboardIcon className="size-4" />主 Agent 边界闸
+            </CardTitle>
+            <CardDescription id="mainagent-boundary-description">
+              主 Agent 是人类操作员的<b>接口</b>：回答问题、把你的要求转成目标（<code>set_goals</code> /{" "}
+              <code>add_intent</code> / <code>steer_work</code>），执行交给规划者与 worker。
+              <br />
+              这道闸在工具调用前生效：它想自己 <code>curl</code>、扫描目标时会被拦下，并被告知改走派活通道。 默认
+              <b>仅提醒</b>；<b>收紧 Bash</b>只放行本任务目录内的只读查看命令。改动即时生效，对下一次工具调用生效。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <Label htmlFor="mainagent-boundary-mode" className="text-sm font-normal text-muted-foreground">
+              {MAINAGENT_BOUNDARY_OPTIONS.find((o) => o.value === mainAgentBoundary)?.hint ?? ""}
+            </Label>
+            <Select
+              value={mainAgentBoundary}
+              onValueChange={(v) => saveMainAgentBoundary(v as "off" | "warn" | "block")}
+              disabled={!loaded || saving}
+            >
+              <SelectTrigger
+                id="mainagent-boundary-mode"
+                aria-describedby="mainagent-boundary-description"
+                className="w-48 shrink-0"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MAINAGENT_BOUNDARY_OPTIONS.map((o) => (
                   <SelectItem key={o.value} value={o.value}>
                     {o.label}
                   </SelectItem>
