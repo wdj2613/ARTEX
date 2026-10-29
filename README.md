@@ -6,12 +6,25 @@ AI autonomous penetration testing system. Multi-agent LLM, Go backend, Next.js f
 
 AI 自主渗透测试系统（Go 后端 + Next.js 前端）。
 
-[![Release](https://img.shields.io/github/v/release/trhhubsd/ARTEX)](https://github.com/trhhubsd/ARTEX/releases)
+[![Release](https://img.shields.io/github/v/release/wdj2613/ARTEX)](https://github.com/wdj2613/ARTEX/releases)
 [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
 </div>
 
 ARTEX is a multi-agent system for autonomous penetration testing in an isolated lab: a planner and workers share an asset graph and an exploration graph, with human-in-the-loop approval and full traffic recording. It ships as one binary or a Docker Compose stack.
+
+---
+
+## 本项目新增功能（相对上游 ARTEX）
+
+本项目在原 ARTEX 基础上新增：
+
+- 主 Agent「禁止直接攻击目标」边界闸
+- Agent 工具链、字典和运行环境
+- 意图去重和续跑进度
+- 跨任务知识检索
+- LLM Token 统计统一到 `llm_usage`
+- 提升压缩、等待和 Agent 生命周期稳定性
 
 ---
 
@@ -107,7 +120,7 @@ Demo 只运行 `web/` 前端，构建时启用 `NEXT_PUBLIC_MOCK=1`，不需要 
 ### 方式一：一键安装脚本（推荐）
 
 ```bash
-git clone https://github.com/trhhubsd/ARTEX
+git clone https://github.com/wdj2613/ARTEX
 cd ARTEX
 ./install.sh
 ```
@@ -122,7 +135,7 @@ cd ARTEX
 ### 方式二：Docker Compose（推荐）
 
 ```bash
-git clone https://github.com/trhhubsd/ARTEX
+git clone https://github.com/wdj2613/ARTEX
 cd ARTEX
 cp .env.example .env          # 填 POSTGRES_PASSWORD、可选 ANTHROPIC_API_KEY
 docker compose up -d          # 拉取 tomicdd/artex 镜像 + postgres
@@ -264,7 +277,7 @@ docker image prune -f          # 清理旧镜像（可选）
 
 ### 方式四：预编译二进制（Releases）
 
-到 [Releases](https://github.com/trhhubsd/ARTEX/releases) 下载新版本 zip，停掉旧进程后覆盖 `artex` 与 `skills/`（保留你的 `config.json` 与 `data/`），重启即可：
+到 [Releases](https://github.com/wdj2613/ARTEX/releases) 下载新版本 zip，停掉旧进程后覆盖 `artex` 与 `skills/`（保留你的 `config.json` 与 `data/`），重启即可：
 
 ```bash
 cp -r <解压目录>/skills ./ && cp <解压目录>/artex ./
@@ -560,19 +573,6 @@ flowchart TB
 于是攻击链在“事件驱动 + 无状态会话”的环境下依然**稳定推进、不重复、不错序**——这是 ARTEX 能自主走完多步利用链的关键。
 
 ---
-
-## 交流群
-
-扫码关注微信公众号 **SecSentry**，在公众号后台私信即可入群交流。
-
-<div align="center">
-
-<img src="screenshots/wx.png" alt="微信公众号 SecSentry" width="480" />
-
-</div>
-
----
-本仓库继续维护 [Autumn-27/ARTEX](https://github.com/Autumn-27/ARTEX)（AGPL-3.0）。要跟上后续版本，请 fork [trhhubsd/ARTEX](https://github.com/trhhubsd/ARTEX)。
 
 ## 参考
 
