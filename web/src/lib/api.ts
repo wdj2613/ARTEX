@@ -809,6 +809,18 @@ export const api = {
       total: r.total,
     })),
   explorationGraph: (task?: string) => get<{ nodes: TaskNode[]; edges: Edge[] }>(`/exploration/graph${tq(task)}`),
+  // 空转指标（只读聚合）：工具返回重复率按工具分组 + 工具失败率 + 终态意图零产出率。
+  // 口径不用「同一 URL 重复请求」——渗透的重复请求是攻击强度，不是浪费（见后端注释）。
+  voidStats: (task?: string) =>
+    get<{
+      available: boolean;
+      tool_results?: number;
+      tool_errors?: number;
+      identical_results?: number;
+      repeat_tools?: { tool: string; calls: number; repeat: number }[];
+      terminal_intents?: number;
+      zero_yield_intents?: number;
+    }>(`/exploration/void-stats${tq(task)}`),
   // 播报板:服务端按创建顺序分页的探索节点(默认最新在前)。
   explorationNodes: (task: string, query: ExplorationNodeQuery = {}) => {
     const q = new URLSearchParams();

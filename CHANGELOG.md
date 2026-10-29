@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Web
+
+- **任务详情新增「空转指标」卡片（只读聚合，不新增埋点）**：要回答「agent 有没有在原地打转」，但口径不能用「同一 URL 请求了几次」——渗透本来就要对同一攻击面反复施压（fuzz、口令喷洒、payload 变异），生产实测路径级重复率 56.3%，Top 明细全是 `shopapi/system/config`、`login_api`、`shop/fuzz` 这类正常目标，而「完全相同的命令」重复只有 1.1%，也就是重复请求 = 攻击强度，不是浪费。因此改看两个信号：① **工具返回有没有新信息**（同任务同工具、`summary` 完全相同的占比，排除错误返回与 <15 字的过短摘要，否则 `ok` / `0` 这类天然重复会把噪声当空转），② **意图有没有产出**（终态意图里 `payload.progress.yields` 为空或 0 的占比）。数据全部来自已有的 `activity` 与 `exploration_nodes`，**不建表、不加列、不加埋点**：新增 `GET /api/exploration/void-stats`（`db/void_stats.go` + `server/void_stats.go`，无任务或无数据返回 `{"available": false}` 而不是 500），前端在任务详情概览页加一张卡片，按工具列出重复率前 6 名。同步补了 `web/src/lib/mock/handler.ts` 的 mock 响应，让 `NEXT_PUBLIC_MOCK=1` 的 demo 也能看到这张卡。
+
 ## [0.4.2] - 2026-10-29
 
 ### 概要

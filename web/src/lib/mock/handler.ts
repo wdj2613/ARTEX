@@ -2308,6 +2308,26 @@ function route(m: string, path: string, seg: string[], q: URLSearchParams, b: Re
       total: selectedTask?.tokens ?? D.tokenTotal,
     };
   }
+  // 空转指标：与后端 /exploration/void-stats 同形状（available + 聚合字段）。
+  // 口径同后端 db/void_stats.go：重复 = 同任务同工具「返回内容完全相同」，
+  // 不统计「同一 URL 重复请求」——渗透的重复请求是攻击强度，不是浪费。
+  if (path === "/exploration/void-stats") {
+    return {
+      available: true,
+      tool_results: 268,
+      tool_errors: 17,
+      identical_results: 96,
+      repeat_tools: [
+        { tool: "list_facts", calls: 62, repeat: 34 },
+        { tool: "node_detail", calls: 41, repeat: 22 },
+        { tool: "list_untested_assets", calls: 28, repeat: 21 },
+        { tool: "get_worker_output", calls: 19, repeat: 9 },
+        { tool: "Bash", calls: 74, repeat: 8 },
+      ],
+      terminal_intents: 21,
+      zero_yield_intents: 6,
+    };
+  }
   if (path === "/exploration/graph") return D.explorationGraph;
   // 播报板:和后端 /exploration/nodes 同语义 —— 按创建顺序(mock 里用 ts + id)分页,
   // 并带上这一页涉及的边与边另一端的节点。

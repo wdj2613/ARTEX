@@ -847,6 +847,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/exploration/activity/stream", s.streamActivity)
 	mux.HandleFunc("GET /api/exploration/activity/{seq}", s.activityDetail)
 	mux.HandleFunc("GET /api/exploration/tokens", s.tokenStats) // 单任务 token（llm_usage 台账）
+	mux.HandleFunc("GET /api/exploration/void-stats", s.voidStats) // 单任务空转指标（activity + 意图产出，只读聚合）
 	mux.HandleFunc("GET /api/tokens/usage", s.pgUsageStats)     // 全局 llm_usage 聚合（仪表盘唯一 token 口径）
 
 	mux.HandleFunc("GET /api/audit", s.getAudit)

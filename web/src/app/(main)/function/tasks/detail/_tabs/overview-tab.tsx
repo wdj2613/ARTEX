@@ -126,6 +126,16 @@ export function OverviewTab({ taskId }: { taskId: string }) {
   const [scopeErr, setScopeErr] = React.useState("");
   // 按模型的 token 用量（来自常开的 llm_usage 计量账本，逐次精确）。
   const [modelTokens, setModelTokens] = React.useState<ModelTokenStat[]>([]);
+  // 空转指标（只读聚合）：工具返回重复率按工具分组 + 失败率 + 终态意图零产出率。
+  // 口径不用「同一 URL 重复请求」——渗透的重复请求是攻击强度，不是浪费。
+  const [voidStats, setVoidStats] = React.useState<{
+    tool_results: number;
+    tool_errors: number;
+    identical_results: number;
+    repeat_tools: { tool: string; calls: number; repeat: number }[];
+    terminal_intents: number;
+    zero_yield_intents: number;
+  } | null>(null);
   // 目标管理：目标列表 + 新增表单 + 行内编辑状态。
   const [goals, setGoals] = React.useState<TaskGoal[]>([]);
   const [goalText, setGoalText] = React.useState("");
@@ -151,6 +161,26 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       setModelTokens(resp.models);
     } catch {
       // 忽略：无 PG 时接口报错，卡片自然为空
+    }
+  }, [taskId]);
+
+  const loadVoidStats = React.useCallback(async () => {
+    try {
+      const resp = await api.voidStats(taskId);
+      if (resp.available) {
+        setVoidStats({
+          tool_results: resp.tool_results ?? 0,
+          tool_errors: resp.tool_errors ?? 0,
+          identical_results: resp.identical_results ?? 0,
+          repeat_tools: resp.repeat_tools ?? [],
+          terminal_intents: resp.terminal_intents ?? 0,
+          zero_yield_intents: resp.zero_yield_intents ?? 0,
+        });
+      } else {
+        setVoidStats(null);
+      }
+    } catch {
+      // 忽略：接口不可用（无 PG 等）时卡片自然为空
     }
   }, [taskId]);
 
@@ -398,11 +428,13 @@ export function OverviewTab({ taskId }: { taskId: string }) {
     void load();
     void loadScope();
     void loadTokens();
+    void loadVoidStats();
     void loadGoals();
     void loadConstraints();
     const timer = setInterval(() => {
       void load();
       void loadTokens();
+      void loadVoidStats();
       void loadGoals();
       void loadConstraints();
     }, 3000);
@@ -410,7 +442,7 @@ export function OverviewTab({ taskId }: { taskId: string }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [taskId, loadScope, loadTokens, loadGoals, loadConstraints]);
+  }, [taskId, loadScope, loadTokens, loadVoidStats, loadGoals, loadConstraints]);
 
   const running = intents.filter((i) => i.state === "running");
   const open = intents.filter((i) => i.state === "open");
@@ -429,6 +461,8 @@ export function OverviewTab({ taskId }: { taskId: string }) {
     },
     { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, calls: 0 },
   );
+  // 空转指标用的百分比：分母为 0 时显示 "—"，避免出现 NaN%。
+  const voidPct = (n: number, d: number) => (d > 0 ? `${Math.round((n / d) * 100)}%` : "—");
 
   return (
     <div className="flex flex-col gap-4">
@@ -802,6 +836,81 @@ export function OverviewTab({ taskId }: { taskId: string }) {
             </>
           ) : (
             <p className="text-muted-foreground text-sm">暂无 LLM 用量（任务尚未产生调用，或记录仍在写入）。</p>
+          )}
+        </CardContent>
+      </Card>
+      {/* 空转指标：工具返回重复率（按工具）+ 失败率 + 终态意图零产出率。
+          口径说明：渗透本身就要对同一攻击面反复施压（fuzz、口令喷洒、payload 变异），
+          所以【不】统计 URL 重复；只看「工具返回有没有新信息」与「意图有没有产出」。 */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base">
+            <ActivityIcon className="size-4 text-sky-500" /> 空转指标
+            <span className="text-muted-foreground text-xs font-normal">（只读聚合：agent 有没有在原地打转）</span>
+          </CardTitle>
+          <CardDescription className="text-xs">
+            统计「工具返回没有新信息」和「意图没有产出」。重复请求同一目标不算空转——渗透本来就要反复施压。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {voidStats && voidStats.tool_results > 0 ? (
+            <>
+              <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">
+                <span className="tabular-nums">
+                  <span className="text-muted-foreground">工具返回 </span>
+                  <span className="font-semibold">{voidStats.tool_results}</span>
+                </span>
+                <span className="tabular-nums">
+                  <span className="text-muted-foreground">重复返回 </span>
+                  <span className="font-semibold text-amber-500">
+                    {voidStats.identical_results}（{voidPct(voidStats.identical_results, voidStats.tool_results)}）
+                  </span>
+                </span>
+                <span className="tabular-nums">
+                  <span className="text-muted-foreground">失败 </span>
+                  <span className="font-semibold text-red-500">
+                    {voidStats.tool_errors}（{voidPct(voidStats.tool_errors, voidStats.tool_results)}）
+                  </span>
+                </span>
+                <span className="tabular-nums">
+                  <span className="text-muted-foreground">终态意图零产出 </span>
+                  <span className="font-semibold">
+                    {voidStats.zero_yield_intents}/{voidStats.terminal_intents}
+                    {voidStats.terminal_intents > 0
+                      ? `（${voidPct(voidStats.zero_yield_intents, voidStats.terminal_intents)}）`
+                      : ""}
+                  </span>
+                </span>
+              </div>
+              {voidStats.repeat_tools.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-muted-foreground border-b text-left text-xs">
+                        <th className="py-1.5 pr-3 font-medium">工具</th>
+                        <th className="py-1.5 pr-3 text-right font-medium">返回</th>
+                        <th className="py-1.5 pr-3 text-right font-medium">重复</th>
+                        <th className="py-1.5 text-right font-medium">重复率</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {voidStats.repeat_tools.slice(0, 6).map((r) => (
+                        <tr key={r.tool} className="border-b last:border-0">
+                          <td className="py-1.5 pr-3 font-mono text-xs">{r.tool}</td>
+                          <td className="py-1.5 pr-3 text-right tabular-nums">{r.calls}</td>
+                          <td className="py-1.5 pr-3 text-right tabular-nums text-amber-500">{r.repeat}</td>
+                          <td className="py-1.5 text-right tabular-nums">{voidPct(r.repeat, r.calls)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-muted-foreground text-sm">没有重复返回——工具调用都在产生新信息。</p>
+              )}
+            </>
+          ) : (
+            <p className="text-muted-foreground text-sm">暂无工具调用记录。</p>
           )}
         </CardContent>
       </Card>
