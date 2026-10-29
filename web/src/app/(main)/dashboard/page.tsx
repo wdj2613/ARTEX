@@ -41,6 +41,8 @@ import type {
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+import { EgressCard } from "./_components/egress-card";
+
 // ── chart constants ───────────────────────────────────────────────────────────
 
 const dailyTrendConfig = {
@@ -585,6 +587,9 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* ── 出口 IP：真实出口 / 代理出口（进页面自动探一次，可手动刷新）── */}
+      <EgressCard />
 
       {/* ── Row 2: LLM Token 消耗 ── */}
       <Card className="p-4">

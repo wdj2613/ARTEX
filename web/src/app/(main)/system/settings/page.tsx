@@ -16,7 +16,6 @@ import { api } from "@/lib/api";
 import { CHAT_SEND_MODE_OPTIONS, type ChatSendMode, setChatSendMode, useChatSendMode } from "@/lib/chat-send-mode";
 import type { EgressReport, LLMProfile, Settings, WorkerPool } from "@/lib/types";
 
-import { useEgressIp } from "../../_components/egress-ip-banner";
 import { BasicAuthCard } from "./_components/basic-auth-card";
 import { UpdateCard } from "./_components/update-card";
 
@@ -68,7 +67,6 @@ export default function SystemSettingsPage() {
   const [savingProxy, setSavingProxy] = React.useState(false);
   const [globalProxyInput, setGlobalProxyInput] = React.useState("");
   const [savingGlobalProxy, setSavingGlobalProxy] = React.useState(false);
-  const [savingEgressVisibility, setSavingEgressVisibility] = React.useState(false);
   // 出口探测：测一次真实请求，拿到"直连 / 经全局代理"两条出口 IP。
   const [egressTesting, setEgressTesting] = React.useState(false);
   const [egressReport, setEgressReport] = React.useState<EgressReport | null>(null);
@@ -99,12 +97,6 @@ export default function SystemSettingsPage() {
   const [noaCompaction, setNoaCompaction] = React.useState(false);
   // 纯前端偏好：不走 /api/settings，直接读写 localStorage。
   const sendMode = useChatSendMode();
-  const {
-    enabled: showEgressIp,
-    isLoading: egressProbeLoading,
-    setEnabled: setShowEgressIp,
-    probeEgress,
-  } = useEgressIp();
 
   const apply = React.useCallback((s: Settings) => {
     setCredentialAgent(!!s.credential_agent_enabled);
@@ -432,7 +424,6 @@ export default function SystemSettingsPage() {
         apply(s);
         // 保存后链路变了，旧结果（尤其"尚未保存"）立刻失效。
         clearEgressReport();
-        if (showEgressIp) void probeEgress().catch(() => undefined);
         toast.success(globalProxyInput.trim() ? "已保存全局代理" : "已清除全局代理（改为直连）");
       })
       .catch((e) => toast.error("保存失败：" + (e as Error).message))
@@ -469,18 +460,6 @@ export default function SystemSettingsPage() {
       .finally(() => {
         if (seq === egressSeq.current) setEgressTesting(false);
       });
-  };
-
-  const toggleEgressVisibility = async (nextEnabled: boolean) => {
-    setSavingEgressVisibility(true);
-    try {
-      await setShowEgressIp(nextEnabled);
-      toast.success(nextEnabled ? "已在顶栏显示出口 IP" : "已关闭顶栏出口 IP显示");
-    } catch (e) {
-      toast.error("保存顶栏出口 IP设置失败：" + (e as Error).message);
-    } finally {
-      setSavingEgressVisibility(false);
-    }
   };
 
   // Run a real "test" search ("test") against the CURRENT form values (backend +
@@ -744,22 +723,6 @@ export default function SystemSettingsPage() {
             <p className="text-muted-foreground text-xs">
               {globalProxyInput.trim() ? "已配置 · 所有目标流量经此代理出网" : "未配置 · 目标流量直连出网"}
             </p>
-            <div className="flex items-center justify-between gap-4 rounded-md border px-3 py-2">
-              <div className="min-w-0">
-                <Label htmlFor="show-egress-ip" className="text-sm font-normal">
-                  在顶栏显示出口 IP
-                </Label>
-                <p className="text-muted-foreground text-xs">
-                  开启后显示直连 IP 和全局代理 IP，使用已保存的全局代理探测。
-                </p>
-              </div>
-              <Switch
-                id="show-egress-ip"
-                checked={showEgressIp}
-                disabled={!settingsLoaded || savingEgressVisibility || egressProbeLoading}
-                onCheckedChange={(checked) => void toggleEgressVisibility(checked)}
-              />
-            </div>
             {/* 紧贴结果区：用户看两行时正好需要它。细节放文档。 */}
             <p className="text-muted-foreground text-xs leading-relaxed">
               点<b>测试</b>会访问 IP 回显服务（默认 <code>api.ipify.org</code>，失败自动换{" "}

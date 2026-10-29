@@ -3442,8 +3442,8 @@ func (s *Server) settingsPayload() map[string]any {
 		concLimit = defaultConcurrencyLimit // 关闭时也回显一个合理默认值给 UI
 	}
 	return map[string]any{
-		"traffic_capture":           s.m.TrafficEnabled(),
-		"agent_traffic_binding":     s.m.pg.GetBool(settingAgentTrafficBinding, false),
+		"traffic_capture":       s.m.TrafficEnabled(),
+		"agent_traffic_binding": s.m.pg.GetBool(settingAgentTrafficBinding, false),
 		// add_intent 近似去重闸：off / warn（默认）/ block，见 agent/intent_dedup.go
 		"agent_intent_dedup": intentDedupModeOf(func() (string, bool, error) { return s.m.pg.GetSetting(settingAgentIntentDedup) }),
 		// 跨任务知识检索：是否开放 + 每任务关键词额度（默认 6）
@@ -3463,7 +3463,6 @@ func (s *Server) settingsPayload() map[string]any {
 		"tavily_key_set":            strings.TrimSpace(tavilyKey) != "",
 		"web_search_proxy":          proxy,                       // 独立出口代理(http/https/socks5)，空=直连
 		"global_proxy":              s.m.GlobalProxy(),           // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
-		"show_egress_ip":            s.m.pg.GetBool(settingShowEgressIP, false),
 		"python_interpreter":        strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
 		"workers":                   s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
 		"worker_pools":              s.m.WorkerPools(),           // 非空时按池顺序绑定 worker 会话
@@ -3542,7 +3541,6 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		TavilyKey        *string       `json:"tavily_search_api_key"`
 		WebSearchProxy   *string       `json:"web_search_proxy"`   // 独立出口代理(http/https/socks5)；null=不改，""=清空
 		GlobalProxy      *string       `json:"global_proxy"`       // 全局出口代理(http/https/socks5)；null=不改，""=清空(直连)
-		ShowEgressIP     *bool         `json:"show_egress_ip"`     // 在顶栏显示直连/全局代理出口 IP；默认关
 		PythonInterp     *string       `json:"python_interpreter"` // 自定义脚本工具的 python 解释器路径
 		Workers          *int          `json:"workers"`            // 并发工作 agent 数(>0)；对之后启动的任务生效
 		WorkerPools      *[]WorkerPool `json:"worker_pools"`
@@ -3771,12 +3769,6 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		changed = true // capture-off egress is baked into agents at build time → rebuild
-	}
-	if req.ShowEgressIP != nil {
-		if err := s.m.pg.SetBool(settingShowEgressIP, *req.ShowEgressIP); err != nil {
-			writeErr(w, 500, err.Error())
-			return
-		}
 	}
 	if req.WebSearchEnabled != nil || req.WebSearchBackend != nil || req.BraveKey != nil || req.TavilyKey != nil || req.WebSearchProxy != nil {
 		// Fill unspecified fields from current state so a partial PUT doesn't reset them.

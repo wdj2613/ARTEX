@@ -3353,7 +3353,6 @@ export const settings: Settings = {
   tavily_key_set: true,
   web_search_proxy: "",
   global_proxy: "",
-	show_egress_ip: false,
   python_interpreter: "/usr/bin/python3",
   workers: 3,
   worker_pools: [],

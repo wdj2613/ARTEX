@@ -15,7 +15,6 @@ import { LayoutControls } from "./sidebar/layout-controls";
 import { SearchDialog } from "./sidebar/search-dialog";
 import { ThemeSwitcher } from "./sidebar/theme-switcher";
 import { UpdateBadge } from "./update-badge";
-import { EgressIpNavbar, EgressIpProvider } from "./egress-ip-banner";
 
 // 任务详情页保持原样：它自带头部/Tabs 与内边距，这里不再叠加全局头部和 padding。
 function isFullBleed(pathname: string) {
@@ -33,11 +32,7 @@ function isFullBleed(pathname: string) {
 }
 
 export function MainContent({ children }: { children: ReactNode }) {
-  return (
-    <EgressIpProvider>
-      <MainContentInner>{children}</MainContentInner>
-    </EgressIpProvider>
-  );
+  return <MainContentInner>{children}</MainContentInner>;
 }
 
 function MainContentInner({ children }: { children: ReactNode }) {
@@ -73,9 +68,8 @@ function MainContentInner({ children }: { children: ReactNode }) {
             />
             <SearchDialog />
           </div>
-          <div className="min-w-0 flex-1">
-            <EgressIpNavbar />
-          </div>
+          {/* 中间留空撑开，右侧操作区保持靠右 */}
+          <div className="min-w-0 flex-1" />
           <div className="flex shrink-0 items-center gap-2">
             {version && (
               <span className="font-medium text-muted-foreground text-xs tabular-nums">版本 · {version}</span>

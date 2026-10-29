@@ -316,7 +316,6 @@ const (
 	// (http/https/socks5). Empty = direct. Distinct from web_search_proxy (which
 	// only routes the search backend) and the per-profile LLM proxy.
 	settingGlobalProxy = "global_proxy"
-	settingShowEgressIP = "show_egress_ip"
 	settingWorkers     = "workers"
 	settingWorkerPools = "worker_pools"
 	settingLLMRecord   = "llm_record"
