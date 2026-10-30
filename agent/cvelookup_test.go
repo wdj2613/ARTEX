@@ -124,8 +124,14 @@ func TestCVELookupProductVersionlessIsCapped(t *testing.T) {
 		t.Fatalf("应提示先确认版本: %q", hint)
 	}
 
-	// 带版本号的查询不触发这条限制。
+	// 带版本号的查询不触发这条限制，且不能因版本拼进索引键而零命中。
 	out2 := callCVE(t, ts, map[string]any{"product": "apache 2.4.49"})
+	if got := out2["count"].(float64); got != 1 {
+		t.Fatalf("带版本应命中同一组件候选: %v", out2)
+	}
+	if out2["product_query"] != "apache 2.4.49" || out2["product_component"] != "apache" || out2["product_version"] != "2.4.49" || out2["version_match_note"] == nil {
+		t.Fatalf("必须保留版本上下文并说明未做适用性判断: %v", out2)
+	}
 	if out2["version_unknown"] == true {
 		t.Fatal("带版本号时不该标注 version_unknown")
 	}

@@ -432,7 +432,8 @@ func (idx *Index) Search(o SearchOpts) []*Entry {
 		}
 	case strings.TrimSpace(o.Product) != "":
 		// 组件名归一化后查 token 索引（product/vendor/CPE 段都在里面）。
-		key := normalize(o.Product)
+		product, _ := SplitProductVersion(o.Product)
+		key := normalize(product)
 		if list, ok := idx.byToken[key]; ok {
 			pool = list
 		} else {

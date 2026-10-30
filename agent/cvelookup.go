@@ -81,7 +81,8 @@ func (t *ToolSet) cveLookup() actool.CoreTool {
 			}
 
 			// 无版本号的组件名查询 → 收窄条数，避免把整个产品线的历史 CVE 倾倒进上下文。
-			versionless := product != "" && cve == "" && cpe == "" && !hasVersionToken(product)
+			_, productVersion := cveidx.SplitProductVersion(product)
+			versionless := product != "" && cve == "" && cpe == "" && productVersion == "" && !hasVersionToken(product)
 			limit := a.Limit
 			if limit <= 0 {
 				if versionless {
@@ -99,6 +100,15 @@ func (t *ToolSet) cveLookup() actool.CoreTool {
 			}
 
 			out := map[string]any{"available": true, "source": "local-templates"}
+			if product != "" && cve == "" && cpe == "" {
+				component, version := cveidx.SplitProductVersion(product)
+				out["product_query"] = product
+				out["product_component"] = component
+				if version != "" {
+					out["product_version"] = version
+					out["version_match_note"] = "仅按组件名检索候选，未按版本范围过滤；所报版本不证明候选适用，仍须真实验证。"
+				}
+			}
 			tplNum, cveNum, builtAt := idx.Stats()
 			out["template_count"] = tplNum
 			out["cve_template_count"] = cveNum

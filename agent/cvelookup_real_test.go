@@ -64,6 +64,19 @@ func TestCVELookupRealLibrary(t *testing.T) {
 	}
 	t.Logf("② 无版本 product=apache → %v 条: %v", out2["count"], seen)
 
+	// 带版本的生产复现：组件候选必须与纯组件一致，且明确未做版本判断。
+	plain := callCVE(t, ts, map[string]any{"product": "thinkphp", "limit": 10})
+	for _, query := range []string{"thinkphp 8.0.3", "ThinkPHP 6"} {
+		versioned := callCVE(t, ts, map[string]any{"product": query, "limit": 10})
+		if versioned["count"] != plain["count"] || versioned["count"].(float64) == 0 {
+			t.Fatalf("%q 候选与纯组件不一致: %v vs %v", query, versioned["count"], plain["count"])
+		}
+		if versioned["product_version"] == nil || versioned["version_match_note"] == nil {
+			t.Fatalf("版本上下文丢失: %v", versioned)
+		}
+		t.Logf("生产复现 %q → %v 条本地候选（仅检索，不向目标发请求）", query, versioned["count"])
+	}
+
 	// ③ 查不到的组件必须优雅降级（给 hint，不是错误）。
 	out3 := callCVE(t, ts, map[string]any{"product": "kingsoft-wps-nonexistent"})
 	if out3["available"] != true {
