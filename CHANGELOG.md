@@ -28,6 +28,10 @@
 
 - **OPSEC 段与「工具箱使用规约」去重，收成一条真源**：两段都讲「不要手搓 curl」，同时注入会让模型在一次 run 里看到两份相似但不同的约束。现在行为约束只由 OPSEC 段拥有，工具箱段只回答「选哪个工具」并显式引用 OPSEC（`agent/worker.go`）；新增 `agent/prompt_test.go:TestOpsecBlockInjectedOnceAndNotDuplicated` 锁住三条：关闭时零注入、开启时恰好出现一次且在工具箱段之前、关键措辞不重复表述。
 
+### 修复
+
+- **抽屉/对话框内的下拉弹层点不中、滚不动、把抽屉一起关掉**（`web/src/components/ui/combobox.tsx`、`web/src/components/ui/sheet.tsx`、`web/src/lib/utils.ts`）：组合框弹层原本 portal 到 `document.body`，而抽屉/对话框是 Radix 模态的——模态期间 body 被设成 `pointer-events:none`，且 react-remove-scroll 会拦掉落在锁外元素上的 `wheel`/`touchmove`。于是新建任务里选计划时间时：点击穿透到下层（落在遮罩上就把抽屉关掉），结束时间列表滚轮事件被 `preventDefault` 掉。现在检测到已打开的模态容器就把弹层挂进容器内部（`positionMethod="fixed"` 避免被容器 `overflow` 裁剪），无模态容器时行为不变。同时把 `SheetContent` 的外部交互判定补齐成与 `dialog.tsx` 一致（只在点遮罩、且当时没有弹层开着时才关闭），并修正该判定用到的选择器：原来用 `[aria-expanded='true'][data-state='open']` 会命中抽屉自己的触发器，导致遮罩永远关不掉抽屉。
+
 ### 前端
 
 - **移动端 `100dvh` 修复迁移到上游新组件**：`traffic-history.tsx`、`http-code-block.tsx` 仍是 `100vh`，手机上会被地址栏吃掉高度；连同漏洞详情页的 `min-w-0` / `break-words` / `46dvh` 一起迁移到合并后的版本。
