@@ -149,3 +149,45 @@ func TestCVESpecSurvivesOverride(t *testing.T) {
 		t.Fatal("main agent 不该带 CVE 验证段（它不直接对目标动手）")
 	}
 }
+
+// OPSEC 准则段来自上游 RuoJi6/ARTEX，由 renderSystem 统一追加到所有角色的
+// 提示词尾部（开 opsec_enabled 才注入）。它与我们自己的「工具箱使用规约」在
+// “别手搓 curl”这一点上主题重叠，所以这里锁住两件事：
+//  1. 段只出现一次、且位置在代码拥有的各尾段之前（不能让重复注入把提示词撑大）；
+//  2. 工具箱段只讲“选哪个工具”，行为约束一律引用 OPSEC（一个真源，不许复述）。
+//
+// 违反任一条，两条相似但不同的约束会同时出现在一次 run 里，模型只会挑一条执行。
+func TestOpsecBlockInjectedOnceAndNotDuplicated(t *testing.T) {
+	t.Cleanup(func() { OpsecEnabled = nil; PromptOverride = nil })
+
+	// 关：一个字都不该出现。
+	OpsecEnabled = func() bool { return false }
+	if got := workerSystem("", "", "/data", "/data"); strings.Contains(got, "【OPSEC 准则") {
+		t.Fatalf("opsec 关闭时不应注入整段，got len=%d", len(got))
+	}
+
+	// 开：恰好一次，且在工具箱段之前。
+	OpsecEnabled = func() bool { return true }
+	got := workerSystem("", "", "/data", "/data")
+	if n := strings.Count(got, "【OPSEC 准则"); n != 1 {
+		t.Fatalf("OPSEC 段应恰好出现 1 次，实际 %d 次", n)
+	}
+	if i, j := strings.Index(got, "【OPSEC 准则"), strings.Index(got, "工具箱使用规约"); !(i >= 0 && j >= 0 && i < j) {
+		t.Fatalf("OPSEC 段应在工具箱规约之前: %d %d", i, j)
+	}
+	// 行为约束只在 OPSEC 里出现一次，工具箱段必须引用而不是复述。
+	if n := strings.Count(got, "随机轮换 User-Agent"); n != 1 {
+		t.Fatalf("“随机轮换 User-Agent”应只由 OPSEC 段出现一次，实际 %d 次", n)
+	}
+	if !strings.Contains(got, "按 **OPSEC 准则**执行") {
+		t.Fatal("工具箱段应显式引用 OPSEC 准则，而不是自己再写一套约束")
+	}
+	if strings.Contains(got, "不得使用 -k、--ignore-https-errors") && strings.Count(got, "证书校验") > 2 {
+		t.Fatal("证书校验约束被重复表述")
+	}
+
+	// 规划者同样只注入一次（OPSEC 是全局尾段，不是 worker 专属）。
+	if n := strings.Count(plannerSystem("目标", "/data", "/data"), "【OPSEC 准则"); n != 1 {
+		t.Fatalf("planner OPSEC 段应恰好 1 次，实际 %d 次", n)
+	}
+}
