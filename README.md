@@ -25,6 +25,8 @@ ARTEX is a multi-agent system for autonomous penetration testing in an isolated 
 - 跨任务知识检索
 - LLM Token 统计统一到 `llm_usage`
 - 提升压缩、等待和 Agent 生命周期稳定性
+- `cve_lookup`：按组件名/CVE 号检索镜像内置的 nuclei 模板库，直接返回可执行的验证命令，命中结果带 `request`/`response` 证据链
+- 在线漏洞情报（NVD / OSV / GitHub PoC / EPSS，设置页可开关）：本地模板库零命中时补上「CVE 刚公布、模板还没写出来」的时间窗
 
 ---
 

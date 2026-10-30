@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [0.4.04] - 2026-10-30
+
+### 概要
+
+**Bug 修复**
+
+- **内置技能更新到不了线上**：`/app/skills` 是宿主绑定挂载（UI 的上传/编辑接口写这个目录），镜像 `COPY skills/ /app/skills/` 被挂载完全遮蔽 —— 0.4.0→0.4.3 期间 `skills/` 的所有改进一条都没生效，宿主那份停在旧版且 `scopesentry` 被编辑坏。改为镜像另存内置源 `/app/skills-builtin` + 启动时按**文件级三方合并**：用户改过的文件保留、自建技能不碰、内置更新才落地、双方都改则另存 `.incoming`。
+- **browser MCP 的工具对所有 agent 全局提前解锁**：`playwright-cli` 技能缺 `mcps: browser` 字段（该字段此前只存在于宿主机手工改的副本里），补齐后由 norma 门控成「加载该技能时才解锁」。
+
+**功能更新**
+
+- 无对外功能新增（本次只修部署机制与 MCP 门控）。
+
 ### 构建与镜像
 
 - **内置技能改为启动时按文件级三方合并同步（修「镜像里的 skills 更新到不了线上」）**（`Dockerfile` + `start.sh` + 新增 `scripts/sync-skills.sh`）。容器里 `/app/skills` 是宿主绑定挂载——UI 的 `POST /api/skills/upload`、`PUT /api/skills/{name}/files/...` 全写这个目录，所以镜像 `COPY skills/ /app/skills/` 会被挂载**完全遮蔽**：实测 0.4.0→0.4.3 期间对 `skills/` 的所有改进（已装工具表、nuclei `-jsonl` 纪律、`cve_lookup` 提示）一条都没到线上，宿主那份仍停在 10-28 的旧版，`scopesentry` 还被编辑坏成 `http: //<主机>`。现在镜像另存一份不被遮蔽的内置源 `COPY skills/ /app/skills-builtin/`，`start.sh` 启动前调 `scripts/sync-skills.sh` 逐**文件**比对三个 hash（内置旧版 / 内置新版 / 目标现有）后合并：用户改过的文件**永远保留**、用户没改过的跟随镜像更新、用户自建技能与新增文件一律不碰、用户删掉的内置文件不补回、双方都改时保留用户版并把新版另存 `<文件>.incoming`。不能简单用镜像覆盖：那会抹掉用户在 UI 里做的修改和上传的技能。同步状态记在 `<skills>/.skill-sync-state`（普通文件、非 `.md`，`skill.LoadDir` 不当技能、`GET /api/skills` 不列出来）；裸机部署没有内置源目录，脚本自动跳过。场景测试 `scripts/sync-skills.test.sh`（9 场景 20 条断言）。
@@ -11,6 +24,10 @@
 ### 工具链
 
 - **`skills/playwright-cli` 补 `mcps: browser`**：browser MCP 在 `mcp_servers` 里是 enabled 的，缺这个字段时它的工具对所有 agent 全局提前解锁（白占上下文、权限面也更大）；写上后由 norma 的 `mcps` 门控成「加载 playwright-cli 技能时才解锁」（`server/assembly.go` 的 `gated` 集合）。该字段此前只存在于宿主机手工改的副本里、仓库从来没有，换机或重建镜像就丢。
+
+### 文档
+
+- **README 补录 0.4.3 漏写的功能**：`cve_lookup`（按组件/CVE 检索内置 nuclei 模板库、返回可执行命令与证据链）与在线漏洞情报（NVD/OSV/GitHub PoC/EPSS）在 0.4.3 发版时没写进「本项目新增功能（相对上游 ARTEX）」—— README 与 CHANGELOG/Release 正文没有自动联动，CI 也不会报错，漏了完全静默。发版流程改为**逐版判定**：有对外功能新增必须先确认是否写入 README，没有则明确跳过。
 
 ## [0.4.3] - 2026-10-30
 
