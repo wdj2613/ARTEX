@@ -4,6 +4,37 @@
 
 ## [Unreleased]
 
+### 并入上游（RuoJi6/ARTEX，72 个提交，截至 35a33b2）
+
+**来源**：本节每一项都来自上游仓库 `RuoJi6/ARTEX`（merge 范围 `a94b67f..35a33b2`，2026-10-28 ~ 10-30；49 个非 merge 提交 / 67 个文件 / +7386 −2484），不是本仓库自研。按约定：**来源只记在本文件，不写入 README**。
+
+- **漏洞报告证据链（复现截图 + 报告复用对话）**（来源：上游 `e8572a1`、`b0a2923`、`9745e7d`、`53840fa`、`af2f9e3`）：`findings` 加 `report_conversation_id` 引用已有 `conversations`（幂等 `ADD COLUMN IF NOT EXISTS`，不建新表）；报告撰写对话可复用、可回溯绑定，历史报告也能补绑（上游 `3f2c44b`）。报告撰写 Agent 在「浏览器与报告安全 → 浏览器截图」开启后拿到 browser MCP，按 `findings/screenshots/finding-<id>-step-<n>.png` 存证，并在报告里统一用工作区相对路径嵌图。
+- **截图内联预览与归档**（来源：上游 `e8572a1`、`b0a2923`，`server/workspace.go`）：`GET /api/workspace/preview` 内联出图（只放行图片扩展名，路径穿越返回 404）；`archiveFindingScreenshots` 把报告引用的截图归档进任务工作区，链接跨会话仍可用。
+- **报告重生成与恢复**（来源：上游 `7946869`、`e5c0721`，新增 `server/finding_report.go`）：`POST /api/exploration/findings/{id}/generate-report` 重跑已存漏洞的撰写流程——进程重启把一次性触发会话丢了也能补。
+- **漏洞列表日期范围筛选 + 工具栏收敛**（来源：上游 `6656d73`、`fe1172c`、`a8640e2`、`6d10c72`、`39658c3`、`06389a5`）：`db/findings.go` 查询加 `from`/`to` 谓词，筛选项与操作按钮收在一行。
+- **容器资源监控**（来源：上游 `5366160`、`df9d38a`、`571b611`）：新增 `GET /api/system/metrics`（`system_metrics.go` + `_linux` / `_unsupported` 分平台文件），仪表盘顶部显示容器 CPU / 内存 / 磁盘。
+- **凭据处理改事件驱动**（来源：上游 `21f68a6`）：`runCredentialProcessor` 由 3 秒轮询改为事件唤醒 + 30 秒兜底扫描，分析结果带 `conversation_id`。
+- **Repeater 工作台重做 + 统一报文编辑器**（来源：上游 `76c76ee`、`3c6070a`、`31baa60`、`caab727`、`5527120`、`08cf862`、`6ad055d`）：请求/响应改用 CodeMirror 的 `PacketCodeEditor`（新增 7 个 `@codemirror/*` 依赖），支持搜索、自动换行与撤销；抓包、Repeater、证据视图的高亮口径统一。
+- **任务流量历史页**（来源：上游 `7946869`、`9192084`、`25dbcf8`）：流量页抽成 `TrafficHistory` 组件，支持按 `task_id` 查历史并显示抓包时间。
+- **资产拓扑视图 + 资产梳理 Agent**（来源：上游 `21646d5`、`7d5c710`、`5472330`、`44924ec` 等 13 个提交，新增 `server/task_asset_mapping.go`）：覆盖图新增「网络拓扑」模式（分区布局、视口复位、路径高亮），并新增内置 assistant `asset_mapper`（只读 `list_assets`/`list_companies`，不参与 planner/worker 循环，经拓扑入口对话驱动）。
+- **任务列表列可见性设置**（来源：上游 `3575b90`）：任务列表可勾选显示哪些列（纯前端偏好）。
+- **OPSEC 准则提示词段**（来源：上游 `2290acf`，`agent/prompt.go` 的 `opsecPromptBlock` + `OpsecEnabled`）：**默认关**；在设置页开启后由 `renderSystem` 追加到所有角色提示词尾部（code-owned，改 DB 提示词也丢不掉），约束请求噪声、证书校验与授权边界。
+- **截图时间标记**（来源：上游 `2290acf`、`21057b1`、`74d8b1e`）：报告截图右上角叠保存时间（不修改原图），Markdown 图片支持放大拖动并显示缩放比例。
+- **容器时区固定 `Asia/Shanghai`**（来源：上游 `2290acf`，`Dockerfile` 装 `tzdata` + `docker-compose.yml` 的 `TZ`）：此前容器跑 UTC，与库里的 `timestamptz` 和报告截图时间口径不一致。
+- **审批记录显示发起 Agent**（来源：上游 `255e11a`）：审批列表能看出这条审批是哪个 Agent 发起的。
+- **侧问面板改造**（来源：上游 `404c4bb`、`2290acf`、`server/side_questions.go`）：漏洞详情的侧问改成独立面板，与报告撰写对话共用会话存储。
+
+### Agent 提示词
+
+- **OPSEC 段与「工具箱使用规约」去重，收成一条真源**：两段都讲「不要手搓 curl」，同时注入会让模型在一次 run 里看到两份相似但不同的约束。现在行为约束只由 OPSEC 段拥有，工具箱段只回答「选哪个工具」并显式引用 OPSEC（`agent/worker.go`）；新增 `agent/prompt_test.go:TestOpsecBlockInjectedOnceAndNotDuplicated` 锁住三条：关闭时零注入、开启时恰好出现一次且在工具箱段之前、关键措辞不重复表述。
+
+### 前端
+
+- **移动端 `100dvh` 修复迁移到上游新组件**：`traffic-history.tsx`、`http-code-block.tsx` 仍是 `100vh`，手机上会被地址栏吃掉高度；连同漏洞详情页的 `min-w-0` / `break-words` / `46dvh` 一起迁移到合并后的版本。
+- **设置页保留本仓库扁平多列布局**：不采用上游的「分类导航 + 搜索」骨架（我们的设置项是另一套：意图去重、主 Agent 边界、跨任务知识检索、在线漏洞情报），只把上游新增的三个开关并成一张「浏览器与报告安全」卡片插入流量配置区。
+- **移除合并带回来的 `egress-ip-banner` 引用**：本仓库已把出口 IP 从顶栏改成仪表盘卡片并删掉该组件，`main-content.tsx` 残留 import 会让 `tsc` 直接报错。
+- **不引入上游的「顶栏出口 IP」设置项 `show_egress_ip`**：本仓库已无该功能位，收下这个键只会变成点了没反应的死开关；合并时在 `server/manager.go`、`server/server.go`、`web/src/lib/types.ts` 三处整体跳过。
+
 ## [0.4.04] - 2026-10-30
 
 ### 概要
