@@ -2,7 +2,18 @@
 
 本项目的重要变更记录在此文件中，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased]
+## [0.4.3] - 2026-10-30
+
+### 概要
+
+本版说明覆盖自上个已发布版本（0.4.2）以来的改动。
+
+- **Agent**：新增 `cve_lookup` 工具，把「这个组件/CVE 有什么已知漏洞」变成一条**可执行命令** —— 查镜像内置的 nuclei 模板库（实测 14164 条 / 4536 条带 CVE），每条结果带 `next`（`nuclei -t <模板绝对路径>` + `-jsonl` 落盘），跑完的 `request`/`response` 直接当 finding 证据；按 CVE 精确查零噪声，同一 CVE 的多个模板按 verified→CVSS→EPSS 去重。
+- **Agent**：`cve_lookup` 增加**在线情报**补充（默认关，设置页可开）—— 本地模板库零命中时自动查 NVD / OSV / GitHub PoC / EPSS，给出 CVSS、是否已被野外利用（CISA KEV）、受影响版本区间和公开 PoC 线索，补上「CVE 刚公布、模板还没写出来」那个时间窗口。在线结果**不给可执行命令**，必须自行构造请求验证。
+- **构建**：nuclei 模板目录改为 `/root/nuclei-templates`（nuclei 自己的默认解析路径）。这是线上 nuclei 真实执行 **0 次**的根因 —— 模板装在 `.local/share` 下，任何不带 `-t` 的命令都报 `no templates provided for scan`，而工具箱文档给 agent 的两条命令恰好都不带 `-t`。
+- **Agent**：worker 提示词新增代码拥有的「CVE 验证链」段（DB 覆盖提示词也丢不掉），并把「多个候选写进**同一条**意图批量跑」写死 —— 逐条派单摘要相似度 0.89，会被意图去重闸判重。
+- **Web**：系统设置新增「漏洞情报（在线检索）」卡片：总开关关闭时只渲染开关与一句说明、其余配置项一律不出现；打开后才展开来源开关、NVD API Key / GitHub Token（各带「已配置」徽标与独立保存，密钥永不回传前端）、独立出口代理与「测试检索」按钮；开了开关但一个 Key 都没配时只提示额度、不阻断使用。
+- **文档**：`pentest-toolbox` 技能里的 nuclei 命令改为必须 `-jsonl` 落盘，并写明已知 CVE 号别用 `-id`、模板随镜像内置不要 `-update`。
 
 ### Agent
 
