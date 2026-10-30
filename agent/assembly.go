@@ -16,6 +16,8 @@ import (
 // UnlockSkill unlocks a named skill's MCPs — hosts call it to rebuild the unlock set
 // from history on a resumed session (design doc C2).
 type DeferredInfo struct {
+	VisibleSkillHints    []SkillHint
+	SkillGuidance        string
 	IntelligenceGuidance string
 	CaseGuidance         string // independent of optional traffic binding
 
@@ -74,6 +76,7 @@ func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) 
 		def.CaseGuidance += historicalFindingReviewGuidance
 	}
 	out = conditionalReadTools(out)
+	def.SkillGuidance = skillDiscoveryGuidance(def.VisibleSkillHints, out)
 	for i, t := range out {
 		out[i] = guardPanic(t)
 	}
