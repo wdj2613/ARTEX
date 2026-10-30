@@ -43,16 +43,21 @@ RUN if [ "$TARGETARCH" = "arm64" ]; then ARCH=arm64; else ARCH=amd64; fi; \
 # nuclei 模板随镜像发布（~84MB）：没有模板的 nuclei 等于没有规则可跑。
 # 单独成层，改业务代码或字典都不会让这 84MB 重新下载。
 # 下载失败只告警不中断——镜像仍有 nuclei 可用，且可用 compose 挂载同名路径补齐。
+#
+# 目标目录必须是 /root/nuclei-templates：这是 nuclei 自己在 .config/nuclei/.templates-config.json
+# 里认的默认目录。曾经装到 /root/.local/share/nuclei-templates，结果 nuclei 默认解析找不到，
+# 任何不带 -t 的命令都报 "Could not run nuclei: no templates provided for scan"——线上
+# 39602 次 Bash 调用里 nuclei 真实执行 0 次就是这个原因。符号链接不能替代（实测仍报错）。
 RUN [ -n "$HTTPS_PROXY" ] && P="--proxy $HTTPS_PROXY" || P=""; \
-    mkdir -p /root/.local/share/nuclei-templates; \
+    mkdir -p /root/nuclei-templates; \
     if curl -fsSL --retry 3 -m 900 $P -o /tmp/nt.zip \
          "https://github.com/projectdiscovery/nuclei-templates/archive/refs/heads/main.zip"; then \
       unzip -q -o /tmp/nt.zip -d /tmp/nt \
-      && mv /tmp/nt/nuclei-templates-main/* /root/.local/share/nuclei-templates/ \
+      && mv /tmp/nt/nuclei-templates-main/* /root/nuclei-templates/ \
       && rm -rf /tmp/nt /tmp/nt.zip \
-      && echo "nuclei 模板: $(find /root/.local/share/nuclei-templates -name '*.yaml' | wc -l) 个"; \
+      && echo "nuclei 模板: $(find /root/nuclei-templates -name '*.yaml' | wc -l) 个"; \
     else \
-      echo "警告：nuclei 模板下载失败，镜像不含模板（可挂载 /root/.local/share/nuclei-templates 补齐）"; \
+      echo "警告：nuclei 模板下载失败，镜像不含模板（可挂载 /root/nuclei-templates 补齐）"; \
     fi
 # 预装 Playwright MCP 与 CLI（全局），运行时不再 npx 联网下载。
 # @playwright/mcp：browser MCP 直接 `npx @playwright/mcp`（已全局装好，无需 -y/@latest）。

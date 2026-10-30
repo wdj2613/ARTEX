@@ -18,6 +18,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/config"
+	"github.com/Autumn-27/artex/cveidx"
 	"github.com/Autumn-27/artex/selfupdate"
 	"github.com/Autumn-27/artex/server"
 )
@@ -113,6 +114,14 @@ func run() int {
 	}
 	log.Printf("[config] skill 目录: %s", skillDir)
 	srv := server.New(ctx, mgr, skillDir, *dataDir, config.BaseDir())
+	// nuclei 模板索引预热：首次构建要扫 1.4 万个 YAML（实测约 3s）。放到后台跑，
+	// 否则第一个 cve_lookup 调用会把这 3s 记在某个 worker 的墙钟预算上。
+	// 模板缺失时 Get 返回错误并缓存，工具侧降级为 available:false，不影响启动。
+	go func() {
+		if _, err := cveidx.Get(); err != nil {
+			log.Printf("[cveidx] 模板索引不可用（cve_lookup 将降级）: %v", err)
+		}
+	}()
 	httpSrv := &http.Server{
 		Addr:              *addr,
 		Handler:           srv.Handler(),

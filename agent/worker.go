@@ -294,6 +294,27 @@ func workerToolboxSpec() string {
 		"- **先 `command -v <工具>` 确认一次即可**，不要反复 `which` 试探浪费轮次。"
 }
 
+// workerCVESpec is 段 [G]: CVE 验证链。代码-owned，改 DB 提示词也丢不掉。
+//
+// 存在的原因（线上实测）：镜像里装了 nuclei + 1.4 万个模板，但 39602 次 Bash 调用里
+// nuclei 真实执行 **0 次**——agent 只反复 `command -v nuclei` 探测，然后回到手搓 curl。
+// 两个根因：① 模板目录与 nuclei 默认路径不一致，照 skill 文档跑必然
+// "no templates provided for scan"；② 没有"什么时候该用模板"的触发条件。这段提示
+// 补的是第 ② 个，第 ① 个在 Dockerfile/索引侧修掉。
+//
+// 刻意强调"批量一条意图"：实测同资产下逐条 CVE 意图的摘要 Dice 相似度 0.89，
+// 会被意图去重闸判成重复（阈值 0.50）。
+func workerCVESpec() string {
+	return "\n\n**已知漏洞（CVE）验证链**（指纹出组件后先查模板库，不要直接手搓猜 payload）：\n" +
+		"- **触发条件**：任何工具/响应里拿到**组件名或版本**（`whatweb` / `httpx -tech-detect` / `Server` 头 / 报错页 / JS 文件），先调一次 `cve_lookup(product=\"组件 版本\")`；已知 CVE 号时用 `cve_lookup(cve=\"CVE-xxxx-xxxx\")`。\n" +
+		"- **拿到 next 就直接跑**：结果里每条带 `next` 字段，把 `<target>` 换成本次目标的 URL 或 host 执行（模板路径已写成绝对路径，`nuclei -t` 一定找得到；**不要**改用 `-id`，实测会报 no templates provided）。\n" +
+		"- **必须 `-jsonl` 落盘**：`next` 已带 `-jsonl -o cve-<CVE>.jsonl`，命中后读该文件——里面的 `request` / `response` 就是证据，直接用于 `report_finding(vulnclass=\"<CVE 号>\")`。不要把命令输出截个屏就当证据。\n" +
+		"- **未命中就是没命中**：模板没命中说明该候选在当前目标上不成立，用 `record_fact` 记一条 inferred（试了哪个 CVE、什么结果），不要硬报 finding，也不要因此判定\"目标没有已知漏洞\"。\n" +
+		"- **多个候选写进同一条意图批量跑**：一条意图里循环跑多个模板；**不要**一个 CVE 派一条意图——摘要只差 CVE 号时相似度约 0.89，会被去重闸判成重复、白烧预算。\n" +
+		"- **模板目录是 `/root/nuclei-templates`**（nuclei 默认目录，已随镜像内置约 1.4 万个模板）。跑整批时用 `nuclei -u <target> -tags cve -rl 100 -jsonl -o nuclei.jsonl`，**不要**执行 `-update`（容器内更新会写入非持久化路径，重建即丢）。\n" +
+		"- **边界不变**：`cve_lookup` 只给候选和命令，**版本/CVE 匹配永远不等于漏洞已存在**——没真实触发就不能进 finding。"
+}
+
 // workerProgressSpec is 段 [E]: 进度留痕的约定。意图是一次性时间预算，撞上限就被迫收尾，
 // 收尾时平台只能把"最后一次汇报"留给规划者——不汇报就等于这次白跑（线上 task#4 有 212 条
 // 意图 exhausted，其中多数续跑都是从零重来）。代码-owned，改 DB 提示词也丢不掉。
@@ -323,7 +344,7 @@ func workerSystem(proxyAddr, caCert, dataDir, runDir string) string {
 	// caCert is present only when the recording MITM is on, which is exactly when
 	// the traffic_* tools are registered — so it gates the traffic-tool note.
 	// Optional finding guidance is added for every role after tool resolution.
-	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + workerWaitSpec() + workerToolboxSpec() + workerProgressSpec()
+	return body + workerTrafficBlock(caCert != "") + workerArtifactSpec(runDir) + workerWaitSpec() + workerToolboxSpec() + workerCVESpec() + workerProgressSpec()
 }
 
 // renderIntentTask formats the claimed intent for the worker's launch USER message:

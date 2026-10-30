@@ -662,6 +662,10 @@ func (t *ToolSet) WorkerTools() []actool.CoreTool {
 		// search_knowledge：跨【所有任务】检索已确认的漏洞与事实——同一厂商的多个部署、
 		// 同族目标、同一套后台/验证码/越权套路，直接复用别人验证过的结论与手法。
 		t.searchKnowledge(),
+		// cve_lookup：按组件名/CVE 号查【本地 nuclei 模板库】，直接给可执行验证命令。
+		// 与 search_knowledge 的分工：那个查"我们自己历史上打出来的结论"，这个查
+		// "这个组件在模板库里有哪些已知漏洞、怎么验"。命中后仍须真实触发才算 finding。
+		t.cveLookup(),
 		// search_all_worker_traces：不必先知道 intent_id，按关键字全局捞命中步骤；
 		// get_worker_trace：锁定某条 work 后列步骤/就地搜/取完整内容。
 		t.searchAllWorkerTraces(), t.getWorkerTrace(),

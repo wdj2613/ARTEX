@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+### Agent
+
+- **新增 `cve_lookup` 工具：把「这个组件/CVE 有什么已知漏洞」变成一条可执行命令**（`cveidx/` 新包 + `agent/cvelookup.go`）。数据源是镜像内置的 nuclei 模板库（实测 14142 条，其中 4657 条带 `cve-id`，1899 条模板名里带版本约束表达式）——模板本身就是请求+匹配器，所以检索结果能直接落到 `nuclei -t <模板绝对路径>` 上，跑完的 `-jsonl` 里带 `request`/`response`，就是 finding 需要的可复现证据，**不需要**额外查流量表。底层不解析版本区间：线上资产指纹里只有 **7%** 带版本号（3/43），做版本匹配等于自造假精度，版本约束交给模板自己的 matcher 判定。三条刻意的限制：① 无版本号的组件名查询把候选压到 top 3（上限 10）并在出参标注 `version_unknown` —— 实测按产品名宽泛匹配时单条资产能捞出 **126** 个历史 CVE（"Apache" 一条），worker 的 1200s 墙钟根本跑不完；② 只返回候选与命令，**不返回漏洞结论**，没真实触发就不能进 finding（与既有「严禁把 CVE 匹配当 finding」的纪律一致）；③ 模板目录缺失时降级为 `{"available": false}` 而不是 500。工具同时给 worker 和 planner，注册走既有的内置工具播种（`toolcatalog.go`），无需迁移。
+- **worker 提示词新增代码拥有的「CVE 验证链」段**（`worker.go` 的 `workerCVESpec`，追加在工具箱段之后、进度留痕之前，有单测锁住且 DB 覆盖提示词也丢不掉）。补的是"什么时候该用模板"这个缺环：拿到组件名/版本先 `cve_lookup`，按返回的 `next` 命令跑（`-jsonl` 强制落盘），命中后用 jsonl 的 request/response 报 finding，未命中记 `inferred` 事实。**强调多个候选写进同一条意图批量跑**——实测同资产下逐条 CVE 意图的摘要 Dice 相似度 **0.889**，远超意图去重闸的 0.50 阈值，逐条派单会被判重。main agent 不带这段（它在 `directActionHeads` 里禁 nuclei）。
+
+### 构建与镜像
+
+- **修 nuclei 模板目录：装到 `/root/nuclei-templates`，而不是 `/root/.local/share/nuclei-templates`**（`Dockerfile` + `docker-compose.yml` 挂载注释）。这是线上 nuclei 真实执行 **0 次**的根因：nuclei 自己在 `.config/nuclei/.templates-config.json` 里认的默认目录是 `/root/nuclei-templates`，模板装在 `.local/share` 下导致默认解析拿不到，任何不带 `-t` 的命令都报 `Could not run nuclei: no templates provided for scan`，而 `skills/pentest-toolbox` 给 agent 的两条命令恰好都不带 `-t`。实测符号链接不能替代（仍报错），`nuclei -update-templates` 才是写到这个目录。compose 里补了「挂载前先 `docker cp` 出内置模板」的说明——空目录会把内置模板盖成空。
+
+### 文档
+
+- **`skills/pentest-toolbox` 的 nuclei 命令修正**：两条命令都改带 `-jsonl -o`（纯文本输出进不了证据链），并写明「已知 CVE 号别用 `-id`（单独使用会报 no templates provided），用 `cve_lookup` 返回的 `-t <绝对路径>`」「模板随镜像内置，不要 `-update`」。
+
 ### Web
 
 - **任务详情新增「空转指标」卡片（只读聚合，不新增埋点）**：要回答「agent 有没有在原地打转」，但口径不能用「同一 URL 请求了几次」——渗透本来就要对同一攻击面反复施压（fuzz、口令喷洒、payload 变异），生产实测路径级重复率 56.3%，Top 明细全是 `shopapi/system/config`、`login_api`、`shop/fuzz` 这类正常目标，而「完全相同的命令」重复只有 1.1%，也就是重复请求 = 攻击强度，不是浪费。因此改看两个信号：① **工具返回有没有新信息**（同任务同工具、`summary` 完全相同的占比，排除错误返回与 <15 字的过短摘要，否则 `ok` / `0` 这类天然重复会把噪声当空转），② **意图有没有产出**（终态意图里 `payload.progress.yields` 为空或 0 的占比）。数据全部来自已有的 `activity` 与 `exploration_nodes`，**不建表、不加列、不加埋点**：新增 `GET /api/exploration/void-stats`（`db/void_stats.go` + `server/void_stats.go`，无任务或无数据返回 `{"available": false}` 而不是 500），前端在任务详情概览页加一张卡片，按工具列出重复率前 6 名。同步补了 `web/src/lib/mock/handler.ts` 的 mock 响应，让 `NEXT_PUBLIC_MOCK=1` 的 demo 也能看到这张卡。

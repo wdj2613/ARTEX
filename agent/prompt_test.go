@@ -112,3 +112,38 @@ func TestToolboxSpecSurvivesOverride(t *testing.T) {
 		t.Fatalf("main agent 提示词也应带工具箱段: %q", main)
 	}
 }
+
+// CVE 验证链段是代码拥有的：DB 覆盖提示词正文也不能把它丢掉，否则 agent 又会回到
+// "command -v nuclei 然后手搓 curl"（线上 39602 次 Bash 调用里 nuclei 真实执行 0 次）。
+func TestCVESpecSurvivesOverride(t *testing.T) {
+	t.Cleanup(func() { PromptOverride = nil })
+	PromptOverride = func(k string) (string, bool) { return "CUSTOM BODY", true }
+
+	got := workerSystem("", "", "/data", "/data")
+	if !strings.Contains(got, "已知漏洞（CVE）验证链") {
+		t.Fatalf("worker 提示词被覆盖后丢了 CVE 段: %q", got)
+	}
+	for _, want := range []string{
+		"cve_lookup",             // 触发条件指向工具
+		"-jsonl",                 // 证据必须落盘
+		"report_finding",         // 命中后走的上报路径
+		"批量",                     // 多个候选写进同一条意图（避免被判重）
+		"/root/nuclei-templates", // 模板目录口径与 Dockerfile 一致
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("CVE 段缺少 %q（提示词：%q）", want, got)
+		}
+	}
+	// 关键纪律必须在：CVE 匹配不等于漏洞已存在。
+	if !strings.Contains(got, "不等于漏洞已存在") {
+		t.Fatalf("CVE 段丢了「匹配不等于已存在」的边界: %q", got)
+	}
+	// 顺序：工具箱段 → CVE 段 → 进度留痕段。
+	if i, j, k := strings.Index(got, "工具箱使用规约"), strings.Index(got, "已知漏洞（CVE）验证链"), strings.Index(got, "进度留痕"); !(i < j && j < k) {
+		t.Fatalf("CVE 段位置不对（应在工具箱之后、进度留痕之前）: %d %d %d", i, j, k)
+	}
+	// main agent 不做 CVE 验证（主控不动手，nuclei 在其禁止名单里）。
+	if main := mainAgentSystem("目标", "/data", "/data"); strings.Contains(main, "已知漏洞（CVE）验证链") {
+		t.Fatal("main agent 不该带 CVE 验证段（它不直接对目标动手）")
+	}
+}

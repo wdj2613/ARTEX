@@ -43,7 +43,11 @@ services:
       # 注意：不要保留注释掉的挂载行同时删掉目录——目录不存在时 Docker 会创建空目录并挂载，
       # 反而把镜像内置的字典盖成空的。
       # - ./wordlists:/opt/artex/wordlists:ro
-      # - ./nuclei-templates:/root/.local/share/nuclei-templates:ro
+      # nuclei 模板目录必须是 /root/nuclei-templates（nuclei 自己的默认解析路径，写错目录
+      # 会让所有不带 -t 的 nuclei 命令报 "no templates provided for scan"）。
+      # 启用前先把镜像内置模板复制出来，否则空目录会把内置的盖成空：
+      #   docker cp artex:/root/nuclei-templates/. ./nuclei-templates/
+      # - ./nuclei-templates:/root/nuclei-templates
     restart: unless-stopped
 
 volumes:

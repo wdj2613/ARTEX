@@ -2156,5 +2156,10 @@ func (t *ToolSet) PlannerTools() []actool.CoreTool {
 		t.addTaskScope(),
 		// list_untested_assets：按需查本任务范围内未测资产(类型+分页)，自行决定补测。
 		t.listUntestedAssets(),
+		// cve_lookup：规划时对指纹出的组件查"有哪些已知 CVE、对应模板是什么"，
+		// 据此派意图时就能把 CVE 号写清、让 worker 有确定的验证路径。
+		// 注意：多个候选要写进**同一条**意图批量跑，不要一条 CVE 派一条意图——
+		// 摘要只差 CVE 号时会被意图去重闸判成重复（实测相似度 0.89）。
+		t.cveLookup(),
 	}
 }
