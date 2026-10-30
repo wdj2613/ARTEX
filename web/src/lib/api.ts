@@ -959,6 +959,28 @@ export const api = {
     tavily_search_api_key?: string;
   }) => post<{ ok: boolean; error?: string; count?: number; backend?: string }>(`/settings/web-search/test`, patch),
 
+  // 在线漏洞情报：拿表单当前值真跑一次检索（未保存的 key/代理也能测）。
+  // 永远 200；失败原因在 error / failed 里，便于分辨 Key、代理还是限流。
+  testCVEOnline: (patch: {
+    cve?: string;
+    product?: string;
+    cve_online_sources?: string;
+    nvd_api_key?: string;
+    github_search_token?: string;
+    cve_online_proxy?: string;
+  }) =>
+    post<{
+      ok: boolean;
+      error?: string;
+      ms?: number;
+      count?: number;
+      query?: string;
+      sample?: string;
+      failed?: string[];
+      degraded?: string[];
+      sources?: { name: string; ok: boolean; count: number; error?: string }[];
+    }>(`/settings/cve-online/test`, patch),
+
   // global_proxy 传空 = 测直连；probe_url 可覆盖默认探测地址（隔离网用）。
   testEgressProxy: (patch: { global_proxy?: string; probe_url?: string }) =>
     post<EgressReport>(`/settings/proxy/test`, patch),

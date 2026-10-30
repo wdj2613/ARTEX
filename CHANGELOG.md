@@ -7,6 +7,7 @@
 ### Agent
 
 - **新增 `cve_lookup` 工具：把「这个组件/CVE 有什么已知漏洞」变成一条可执行命令**（`cveidx/` 新包 + `agent/cvelookup.go`）。数据源是镜像内置的 nuclei 模板库（实测 14142 条，其中 4657 条带 `cve-id`，1899 条模板名里带版本约束表达式）——模板本身就是请求+匹配器，所以检索结果能直接落到 `nuclei -t <模板绝对路径>` 上，跑完的 `-jsonl` 里带 `request`/`response`，就是 finding 需要的可复现证据，**不需要**额外查流量表。底层不解析版本区间：线上资产指纹里只有 **7%** 带版本号（3/43），做版本匹配等于自造假精度，版本约束交给模板自己的 matcher 判定。三条刻意的限制：① 无版本号的组件名查询把候选压到 top 3（上限 10）并在出参标注 `version_unknown` —— 实测按产品名宽泛匹配时单条资产能捞出 **126** 个历史 CVE（"Apache" 一条），worker 的 1200s 墙钟根本跑不完；② 只返回候选与命令，**不返回漏洞结论**，没真实触发就不能进 finding（与既有「严禁把 CVE 匹配当 finding」的纪律一致）；③ 模板目录缺失时降级为 `{"available": false}` 而不是 500。工具同时给 worker 和 planner，注册走既有的内置工具播种（`toolcatalog.go`），无需迁移。
+- **`cve_lookup` 增加在线情报补充（本地模板库零命中时才查，默认关）**（新包 `cveonline/`）。镜像内置的模板库是快照，CVE 刚公布、模板还没写出来时本地必然零命中——这个时间窗口只能靠在线源补。四个源：**NVD**（CVSS / CISA KEV / 版本区间 / 参考链接）、**OSV**（npm/PyPI/Go/Packagist 的包级区间）、**GitHub**（公开 PoC 数量与样例）、**EPSS**（利用概率，随 NVD 一起批量取）。三条刻意的取舍：① 在线结果**不产生 `next` 命令**——它只有版本区间和链接、没有请求与匹配器，硬凑命令会诱导模型把未验证的东西当 finding 报；② **缺 key 不关闭功能**（与 `web_search` 相反）：三个源不配 key 都能用，key 只提额度（NVD 5→50 次/30s、GitHub 未认证 10 次/分钟），降级状态写进出参的 `degraded` 让模型自己知道；③ 单源失败一律降级、绝不上升为工具错误，本地模板结果必须照常可用。实测两个必须的修正：NVD 的 `keywordSearch` 没有排序参数、默认按 CVE 号升序返回（"apache http server" 555 条的前 3 条是 1999 年的），所以要先用一次请求读 `totalResults` 再翻到最后一页取最新；GitHub 搜索把 `in:readme` 去掉，否则按 star 排序会把 `How-To-Secure-A-Linux-Server`（3.2 万星安全清单）当成首条 PoC。
 - **worker 提示词新增代码拥有的「CVE 验证链」段**（`worker.go` 的 `workerCVESpec`，追加在工具箱段之后、进度留痕之前，有单测锁住且 DB 覆盖提示词也丢不掉）。补的是"什么时候该用模板"这个缺环：拿到组件名/版本先 `cve_lookup`，按返回的 `next` 命令跑（`-jsonl` 强制落盘），命中后用 jsonl 的 request/response 报 finding，未命中记 `inferred` 事实。**强调多个候选写进同一条意图批量跑**——实测同资产下逐条 CVE 意图的摘要 Dice 相似度 **0.889**，远超意图去重闸的 0.50 阈值，逐条派单会被判重。main agent 不带这段（它在 `directActionHeads` 里禁 nuclei）。
 
 ### 构建与镜像
@@ -19,6 +20,7 @@
 
 ### Web
 
+- **设置页新增「漏洞情报（在线检索）」卡片**：总开关关闭时**只渲染一个开关和一句说明**，其余配置项一律不出现（对应"关掉就不该看到多余设置"）；打开后才展开三个来源的独立开关、NVD API Key 与 GitHub Token（各自带「已配置」徽标和独立保存按钮，密钥永不回传前端）、独立出口代理、以及「测试检索」按钮。**打开但一个 Key 都没配**时给琥珀色提示并明确写清「功能可用，只是额度低」，不阻断使用——因为这三个源本来就不需要 Key。测试按钮拿表单当前值真跑一次（不吃缓存），失败时把每个源的具体原因带进 toast，能立刻分辨是 Key 错、代理不通还是被限流。对应后端新增 `POST /api/settings/cve-online/test`。
 - **任务详情新增「空转指标」卡片（只读聚合，不新增埋点）**：要回答「agent 有没有在原地打转」，但口径不能用「同一 URL 请求了几次」——渗透本来就要对同一攻击面反复施压（fuzz、口令喷洒、payload 变异），生产实测路径级重复率 56.3%，Top 明细全是 `shopapi/system/config`、`login_api`、`shop/fuzz` 这类正常目标，而「完全相同的命令」重复只有 1.1%，也就是重复请求 = 攻击强度，不是浪费。因此改看两个信号：① **工具返回有没有新信息**（同任务同工具、`summary` 完全相同的占比，排除错误返回与 <15 字的过短摘要，否则 `ok` / `0` 这类天然重复会把噪声当空转），② **意图有没有产出**（终态意图里 `payload.progress.yields` 为空或 0 的占比）。数据全部来自已有的 `activity` 与 `exploration_nodes`，**不建表、不加列、不加埋点**：新增 `GET /api/exploration/void-stats`（`db/void_stats.go` + `server/void_stats.go`，无任务或无数据返回 `{"available": false}` 而不是 500），前端在任务详情概览页加一张卡片，按工具列出重复率前 6 名。同步补了 `web/src/lib/mock/handler.ts` 的 mock 响应，让 `NEXT_PUBLIC_MOCK=1` 的 demo 也能看到这张卡。
 
 ## [0.4.2] - 2026-10-29

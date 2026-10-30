@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Autumn-27/artex/cveidx"
+	"github.com/Autumn-27/artex/cveonline"
 	actool "github.com/Autumn-27/norma/tool"
 )
 
@@ -30,12 +32,15 @@ func (t *ToolSet) cveLookup() actool.CoreTool {
 		"按 CVE 号或组件名检索【本地 nuclei 模板库】，返回可执行验证命令。"+
 			"cve 精确查（零噪声，首选）；product 按组件名查候选（指纹里没有版本号时会退化为宽泛匹配，出参会标注）；cpe 按 CPE 前缀查。"+
 			"每条结果带 next 字段：把 <target> 换成本次目标的 URL/host 直接执行，命中后按 jsonl 里的 request/response 报 finding。"+
+			"本地模板库零命中时会自动查【在线情报】（NVD/OSV/GitHub PoC/EPSS，需在设置里开启），给出 CVSS、是否已被野外利用、版本区间与 PoC 线索——"+
+			"在线结果**没有可执行命令**，必须自己构造请求验证。"+
 			"注意：本工具只给候选与命令，**不等于漏洞已存在**，必须真实触发才算确认。",
 		obj(map[string]any{
 			"cve":     str("CVE 号，如 CVE-2021-41773。最精确，优先用它"),
 			"product": str("组件名，如 nginx / apache / fastapi / thinkphp。指纹里带版本时可写成 \"nginx 1.24.0\""),
 			"cpe":     str("CPE 前缀，如 cpe:2.3:a:apache:http_server"),
 			"keyword": str("模板名称关键词，如 \"path traversal\"（前三个都不给时才用）"),
+			"online":  str("在线补充：auto（默认，本地无模板时才查）/ off（本次只查本地）/ force（本地有也再查在线）"),
 			"verified_only": map[string]any{
 				"type": "boolean", "description": "只要 nuclei 官方标注 verified:true 的模板（推荐开启）",
 			},
@@ -44,12 +49,13 @@ func (t *ToolSet) cveLookup() actool.CoreTool {
 			},
 			"limit": intp("返回条数上限。默认 5；组件名无版本时默认 3、上限 10"),
 		}),
-		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
+		func(ctx context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
 				CVE          string  `json:"cve"`
 				Product      string  `json:"product"`
 				CPE          string  `json:"cpe"`
 				Keyword      string  `json:"keyword"`
+				Online       string  `json:"online"`
 				VerifiedOnly bool    `json:"verified_only"`
 				MinCVSS      float64 `json:"min_cvss"`
 				Limit        int     `json:"limit"`
@@ -114,8 +120,15 @@ func (t *ToolSet) cveLookup() actool.CoreTool {
 
 			out["count"] = len(items)
 			out["items"] = items
+
+			// 在线补充：本地模板库零命中时自动查一次（或调用方 online=force 强制查）。
+			// 开关关闭时这里一次网络请求都不发——只在本地零命中时回一行 enabled:false。
+			if len(items) == 0 || strings.EqualFold(strings.TrimSpace(a.Online), "force") {
+				out["online"] = t.cveOnlineSection(ctx, a.Online, cve, product, keyword, limit)
+			}
+
 			if len(items) == 0 {
-				out["hint"] = "本地模板库没有匹配。可用 web_search 查该组件/CVE 的公开资料与 PoC，再自行构造验证请求（或 Write 一个自定义 nuclei 模板到工作目录后用 -t 跑）。"
+				out["hint"] = "本地模板库没有匹配。若上面 online 段有结果，按其中的 affected 版本区间与 refs / poc_samples 线索自行构造验证请求，或 Write 一个自定义 nuclei 模板用 -t 跑；也可以用 web_search 补公开资料。"
 				return jsonResult(out)
 			}
 			if versionless {
@@ -127,6 +140,55 @@ func (t *ToolSet) cveLookup() actool.CoreTool {
 				"命令未命中即该候选不成立，记为 record_fact 的 inferred 结论，不要当 finding 上报。"
 			return jsonResult(out)
 		})
+}
+
+// cveOnlineSection 是 cve_lookup 出参里的 online 段。它只可能出现在两种情况下：
+// 本地模板库零命中，或调用方显式要求 online=force。
+//
+// 三条硬约束：
+//   - 总开关关闭 → 一次网络请求都不发，只回 enabled:false + 一句怎么打开。
+//   - 任何失败都不上升为工具错误：本地结果必须照常可用，在线只是锦上添花。
+//   - 出参里**不给 next 命令**。在线源只有版本区间和链接、没有请求/匹配器，
+//     硬凑一条命令会让模型以为可以直接跑，最后把"没验证"的东西当 finding 报上去。
+func (t *ToolSet) cveOnlineSection(ctx context.Context, mode, cve, product, keyword string, limit int) map[string]any {
+	o := t.cveOnline
+	if !o.Enabled {
+		return map[string]any{
+			"enabled": false,
+			"hint":    "在线漏洞情报未启用。需要时可在 设置 → 漏洞情报 里打开（打开后本地无模板时会自动补充 CVSS / KEV / PoC 线索）。",
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(mode), "off") {
+		return map[string]any{"enabled": true, "skipped": "本次调用指定了 online=off"}
+	}
+
+	// 单源自身 8s 超时；这里再给一个总预算，防止多源叠加把 worker 的墙钟吃掉。
+	c, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	res, err := cveonline.Lookup(c, o, cveonline.Query{CVE: cve, Product: product, Keyword: keyword, Limit: limit})
+	if err != nil {
+		return map[string]any{"enabled": true, "ok": false, "error": err.Error()}
+	}
+
+	out := map[string]any{"enabled": true, "ok": true, "count": len(res.Hits)}
+	if len(res.Hits) > 0 {
+		out["items"] = res.Hits
+	}
+	if len(res.Sources) > 0 {
+		out["sources"] = res.Sources // 每源 ok/count/error，模型能看出哪个源降级了
+	}
+	if len(res.Degraded) > 0 {
+		out["degraded"] = res.Degraded
+	}
+	if res.Note != "" {
+		out["note"] = res.Note
+	}
+	if res.Cached {
+		out["cached"] = true
+	}
+	out["evidence_rule"] = "在线结果只有版本区间与公开链接、**没有可执行模板**：先按 affected 判断目标版本是否落在区间内，" +
+		"再读 refs / poc_samples 里的 PoC 自行构造请求验证。**未经真实触发不得上报 finding**。"
+	return out
 }
 
 // cveItem 把一条索引条目压成紧凑出参。next 用模板绝对路径——实测 `nuclei -id <CVE>`

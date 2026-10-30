@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/agent"
+	"github.com/Autumn-27/artex/cveonline"
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/artex/llmpool"
@@ -846,9 +847,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/exploration/main-session/new", s.newMainSession)
 	mux.HandleFunc("GET /api/exploration/activity/stream", s.streamActivity)
 	mux.HandleFunc("GET /api/exploration/activity/{seq}", s.activityDetail)
-	mux.HandleFunc("GET /api/exploration/tokens", s.tokenStats) // 单任务 token（llm_usage 台账）
+	mux.HandleFunc("GET /api/exploration/tokens", s.tokenStats)    // 单任务 token（llm_usage 台账）
 	mux.HandleFunc("GET /api/exploration/void-stats", s.voidStats) // 单任务空转指标（activity + 意图产出，只读聚合）
-	mux.HandleFunc("GET /api/tokens/usage", s.pgUsageStats)     // 全局 llm_usage 聚合（仪表盘唯一 token 口径）
+	mux.HandleFunc("GET /api/tokens/usage", s.pgUsageStats)        // 全局 llm_usage 聚合（仪表盘唯一 token 口径）
 
 	mux.HandleFunc("GET /api/audit", s.getAudit)
 	mux.HandleFunc("POST /api/gc", s.gc)
@@ -896,6 +897,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/notify/deliveries", s.notifyListDeliveries)
 	mux.HandleFunc("POST /api/notify/deliveries/{id}/retry", s.notifyRetryDelivery)
 	mux.HandleFunc("POST /api/settings/web-search/test", s.testWebSearch)
+	mux.HandleFunc("POST /api/settings/cve-online/test", s.testCVEOnline)
 	// 出口代理连通性测试：发真实请求验证 global_proxy 是否可用，并回显出口 IP。
 	mux.HandleFunc("POST /api/settings/proxy/test", s.testEgressProxy)
 	mux.HandleFunc("GET /api/report", s.getReport)
@@ -3393,6 +3395,7 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) settingsPayload() map[string]any {
 	on, backend, braveKey, tavilyKey, proxy := s.m.WebSearch()
+	cveOn, cveSources, nvdKey, ghTok, cveProxy := s.m.CVEOnline()
 	pyStored, _, _ := s.m.pg.GetSetting(settingPythonInterp)
 	concOn, concLimit := s.m.ConcurrencyLimit()
 	if concLimit == 0 {
@@ -3420,13 +3423,19 @@ func (s *Server) settingsPayload() map[string]any {
 		"web_search_backend":        backend,
 		"brave_key_set":             strings.TrimSpace(braveKey) != "",
 		"tavily_key_set":            strings.TrimSpace(tavilyKey) != "",
-		"web_search_proxy":          proxy,                       // 独立出口代理(http/https/socks5)，空=直连
-		"global_proxy":              s.m.GlobalProxy(),           // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
-		"python_interpreter":        strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
-		"workers":                   s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
-		"worker_pools":              s.m.WorkerPools(),           // 非空时按池顺序绑定 worker 会话
-		"task_concurrency_enabled":  concOn,                      // 任务并发上限开关(默认关)
-		"task_concurrency_limit":    concLimit,                   // 同时运行任务上限(开启后默认5)
+		"web_search_proxy":          proxy, // 独立出口代理(http/https/socks5)，空=直连
+		// 在线漏洞情报（cve_lookup 的在线补充）。key/token 永不回传，只回是否已配置。
+		"cve_online_enabled":       cveOn,
+		"cve_online_sources":       strings.Join(cveSources, ","),
+		"nvd_key_set":              strings.TrimSpace(nvdKey) != "",
+		"github_token_set":         strings.TrimSpace(ghTok) != "",
+		"cve_online_proxy":         cveProxy,
+		"global_proxy":             s.m.GlobalProxy(),           // 全局出口代理(http/https/socks5)，所有目标流量走它，空=直连
+		"python_interpreter":       strings.TrimSpace(pyStored), // 用户/自动设的值(空=用运行时检测)
+		"workers":                  s.m.Workers(),               // 并发工作 agent 数(默认3)；对之后启动的任务生效
+		"worker_pools":             s.m.WorkerPools(),           // 非空时按池顺序绑定 worker 会话
+		"task_concurrency_enabled": concOn,                      // 任务并发上限开关(默认关)
+		"task_concurrency_limit":   concLimit,                   // 同时运行任务上限(开启后默认5)
 		// LLM 轮询(故障转移)。默认关；开启后走全局激活配置的 agent 在当前配置不可用时
 		// 自动切到下一个配置。bind_fallback 仅在轮询开启时有意义(默认关)。
 		"llm_pool_enabled":       s.m.LLMPoolEnabled(),
@@ -3494,11 +3503,17 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		LLMRecord           *bool `json:"llm_record"` // LLM 录制开关（默认关）；即时生效，无需重建 agent
 		// Web search. WebSearchEnabled/Backend toggle the tool + backend; BraveKey/TavilyKey
 		// are optional — omit (null) to leave a stored key untouched, send "" to clear.
-		WebSearchEnabled *bool         `json:"web_search_enabled"`
-		WebSearchBackend *string       `json:"web_search_backend"`
-		BraveKey         *string       `json:"brave_search_api_key"`
-		TavilyKey        *string       `json:"tavily_search_api_key"`
-		WebSearchProxy   *string       `json:"web_search_proxy"`   // 独立出口代理(http/https/socks5)；null=不改，""=清空
+		WebSearchEnabled *bool   `json:"web_search_enabled"`
+		WebSearchBackend *string `json:"web_search_backend"`
+		BraveKey         *string `json:"brave_search_api_key"`
+		TavilyKey        *string `json:"tavily_search_api_key"`
+		WebSearchProxy   *string `json:"web_search_proxy"` // 独立出口代理(http/https/socks5)；null=不改，""=清空
+		// 在线漏洞情报（cve_lookup）。NVDKey/GitHubToken 为 nil 时保持已存值，""=清空。
+		CVEOnlineEnabled *bool         `json:"cve_online_enabled"`
+		CVEOnlineSources *string       `json:"cve_online_sources"` // 逗号分隔：nvd,osv,github
+		NVDKey           *string       `json:"nvd_api_key"`
+		GitHubToken      *string       `json:"github_search_token"`
+		CVEOnlineProxy   *string       `json:"cve_online_proxy"`   // 空=直连；不复用 global_proxy
 		GlobalProxy      *string       `json:"global_proxy"`       // 全局出口代理(http/https/socks5)；null=不改，""=清空(直连)
 		PythonInterp     *string       `json:"python_interpreter"` // 自定义脚本工具的 python 解释器路径
 		Workers          *int          `json:"workers"`            // 并发工作 agent 数(>0)；对之后启动的任务生效
@@ -3759,6 +3774,23 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		changed = true
 	}
+	if req.CVEOnlineEnabled != nil || req.CVEOnlineSources != nil || req.NVDKey != nil || req.GitHubToken != nil || req.CVEOnlineProxy != nil {
+		// 未指定的字段沿用当前值，避免部分 PUT 把已配的 key/源重置。
+		curOn, curSrc, _, _, _ := s.m.CVEOnline()
+		on := curOn
+		if req.CVEOnlineEnabled != nil {
+			on = *req.CVEOnlineEnabled
+		}
+		src := curSrc
+		if req.CVEOnlineSources != nil {
+			src = cveonline.ParseSources(*req.CVEOnlineSources)
+		}
+		if err := s.m.SetCVEOnline(on, src, req.NVDKey, req.GitHubToken, req.CVEOnlineProxy); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		changed = true
+	}
 	if changed {
 		// rebuild agents so the new proxy/tools/prompt/web-search take hold (only if LLM configured).
 		s.cfgMu.Lock()
@@ -3832,6 +3864,101 @@ func (s *Server) testWebSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "count": len(results), "backend": backend})
+}
+
+// testCVEOnline 用请求里的（未保存的）配置真跑一次在线漏洞情报检索，语义对齐
+// testWebSearch：表单里没重填的 key 回退到已存值，代理按表单原样用（空=测直连）。
+// 永远返回 200 + {ok, error?, count?, sources?, degraded?, ms?}，让用户能立刻看出
+// 是 key 有问题、还是代理不通、还是被限流。
+func (s *Server) testCVEOnline(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		CVE         string `json:"cve"`
+		Product     string `json:"product"`
+		Sources     string `json:"cve_online_sources"`
+		NVDKey      string `json:"nvd_api_key"`
+		GitHubToken string `json:"github_search_token"`
+		Proxy       string `json:"cve_online_proxy"`
+	}
+	// 空 body 也允许：全部回退到已保存配置。
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	_, storedSrc, storedNVD, storedGH, _ := s.m.CVEOnline()
+
+	src := storedSrc
+	if strings.TrimSpace(req.Sources) != "" {
+		src = cveonline.ParseSources(req.Sources)
+	}
+	nvdKey := storedNVD
+	if strings.TrimSpace(req.NVDKey) != "" {
+		nvdKey = strings.TrimSpace(req.NVDKey)
+	}
+	ghTok := storedGH
+	if strings.TrimSpace(req.GitHubToken) != "" {
+		ghTok = strings.TrimSpace(req.GitHubToken)
+	}
+	// 测试一律显式带上 Enabled：用户点"测试"就是想验证这套配置能不能用，
+	// 不该因为总开关还没保存而被跳过。
+	opts := cveonline.Opts{
+		Enabled:     true,
+		Sources:     src,
+		NVDKey:      nvdKey,
+		GitHubToken: ghTok,
+		Proxy:       strings.TrimSpace(req.Proxy),
+	}
+	// 探测目标固定用 Log4Shell：三个源都有记录，能同时验证连通性与解析。
+	q := cveonline.Query{CVE: strings.TrimSpace(req.CVE), Product: strings.TrimSpace(req.Product), Limit: 3}
+	if q.CVE == "" && q.Product == "" {
+		q.CVE = "CVE-2021-44228"
+	}
+
+	// 多源串行最坏 4×8s，给 40s 上限，避免慢代理把请求挂住。
+	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+	defer cancel()
+	start := time.Now()
+	// 测试不吃缓存：用户就是要知道"现在这一刻"通不通。
+	cveonline.Invalidate()
+	res, err := cveonline.Lookup(ctx, opts, q)
+	ms := time.Since(start).Milliseconds()
+	if err != nil {
+		writeJSON(w, 200, map[string]any{"ok": false, "error": err.Error(), "ms": ms})
+		return
+	}
+	okCount := 0
+	var failed []string
+	for _, st := range res.Sources {
+		if st.OK {
+			okCount++
+		} else {
+			failed = append(failed, st.Name+": "+st.Error)
+		}
+	}
+	ok := okCount > 0 && len(res.Hits) > 0
+	body := map[string]any{
+		"ok":       ok,
+		"ms":       ms,
+		"count":    len(res.Hits),
+		"sources":  res.Sources,
+		"degraded": res.Degraded,
+		"query":    q.CVE,
+	}
+	if len(failed) > 0 {
+		body["failed"] = failed
+	}
+	if len(res.Hits) > 0 {
+		body["sample"] = res.Hits[0].CVE
+	}
+	// 失败时一定给出一句人能直接读的原因——前端只弹 error，别让它显示"未知错误"。
+	if !ok {
+		switch {
+		case len(failed) > 0:
+			body["error"] = fmt.Sprintf("%d 个源失败：%s", len(failed), failed[0])
+		default:
+			body["error"] = "所有源都没有返回结果（可能是限流或网络不通）"
+		}
+	}
+	writeJSON(w, 200, body)
 }
 
 // mainSessions lists the task's main-agent conversation segments (newest-first) and

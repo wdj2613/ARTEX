@@ -129,6 +129,8 @@ func TestCVESpecSurvivesOverride(t *testing.T) {
 		"report_finding",         // 命中后走的上报路径
 		"批量",                     // 多个候选写进同一条意图（避免被判重）
 		"/root/nuclei-templates", // 模板目录口径与 Dockerfile 一致
+		"在线情报",                   // 本地无模板时走在线补充
+		"KEV",                    // 在线结果里最有价值的优先级信号
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("CVE 段缺少 %q（提示词：%q）", want, got)

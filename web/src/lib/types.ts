@@ -989,6 +989,17 @@ export interface Settings {
   tavily_search_api_key?: string;
   // 独立出口代理(http/https/socks5)，用于访问搜索端点；与记录流量的 MITM 代理无关。空=直连。
   web_search_proxy?: string;
+  // 在线漏洞情报（cve_lookup 的在线补充）。默认关：关闭时 cve_lookup 只查本地 nuclei
+  // 模板库，一次网络请求都不发。nvd_key_set / github_token_set 只表示是否已配置，
+  // 密钥值永不回传；PUT 时发对应字段才写入（"" = 清空）。
+  cve_online_enabled: boolean;
+  cve_online_sources: string; // 逗号分隔：nvd,osv,github
+  nvd_key_set: boolean;
+  github_token_set: boolean;
+  // 独立出口，仅用于访问情报源；空=直连。**不要**与 global_proxy 混用。
+  cve_online_proxy?: string;
+  nvd_api_key?: string; // write-only
+  github_search_token?: string; // write-only
   // 全局出口代理(http/https/socks5，可带 user:pass)，所有目标流量走它。开启流量捕获时作为
   // MITM 上游；关闭捕获时直接注入 agent 的 bash/WebFetch。空=直连。
   global_proxy?: string;

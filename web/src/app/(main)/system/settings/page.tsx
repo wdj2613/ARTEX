@@ -105,6 +105,17 @@ export default function SystemSettingsPage() {
   // 探测地址：留空用公网回显；隔离网填内网回显服务。
   const [egressProbeUrl, setEgressProbeUrl] = React.useState("");
   const [testing, setTesting] = React.useState(false);
+  // 在线漏洞情报（cve_lookup 的在线补充）。关闭时不渲染下面任何配置项，
+  // 后端也不会发起任何网络请求。
+  const [cveOnline, setCveOnline] = React.useState(false);
+  const [cveSources, setCveSources] = React.useState<string[]>(["nvd", "osv", "github"]);
+  const [nvdKeySet, setNvdKeySet] = React.useState(false);
+  const [nvdKeyInput, setNvdKeyInput] = React.useState("");
+  const [ghTokenSet, setGhTokenSet] = React.useState(false);
+  const [ghTokenInput, setGhTokenInput] = React.useState("");
+  const [cveProxyInput, setCveProxyInput] = React.useState("");
+  const [savingCVE, setSavingCVE] = React.useState(false);
+  const [cveTesting, setCveTesting] = React.useState(false);
   const [loaded, setLoaded] = React.useState(false);
   const [settingsLoaded, setSettingsLoaded] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
@@ -141,6 +152,16 @@ export default function SystemSettingsPage() {
     setBraveKeySet(!!s.brave_key_set);
     setTavilyKeySet(!!s.tavily_key_set);
     setProxyInput(s.web_search_proxy ?? "");
+    setCveOnline(!!s.cve_online_enabled);
+    setCveSources(
+      (s.cve_online_sources ?? "nvd,osv,github")
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean),
+    );
+    setNvdKeySet(!!s.nvd_key_set);
+    setGhTokenSet(!!s.github_token_set);
+    setCveProxyInput(s.cve_online_proxy ?? "");
     const savedProxy = s.global_proxy ?? "";
     setGlobalProxyInput(savedProxy);
     setPyInterp(s.python_interpreter ?? "");
@@ -525,6 +546,85 @@ export default function SystemSettingsPage() {
 
   // brave-free selected but no key stored and none being entered → tool stays off.
   const braveNeedsKey = webSearch && backend === "brave-free" && !braveKeySet;
+
+  // ---- 在线漏洞情报 ----
+  // 统一保存入口：只把 patch 里的字段发给后端（其余为 undefined → 后端保持原值）。
+  const saveCVE = (patch: Partial<Settings>) => {
+    setSavingCVE(true);
+    api
+      .setSettings(patch)
+      .then((s) => {
+        apply(s);
+        toast.success("已保存在线漏洞情报配置");
+      })
+      .catch((e) => {
+        toast.error("保存失败：" + (e as Error).message);
+        api
+          .settings()
+          .then(apply)
+          .catch(() => undefined);
+      })
+      .finally(() => setSavingCVE(false));
+  };
+
+  const toggleSource = (src: string, on: boolean) => {
+    const next = on ? Array.from(new Set([...cveSources, src])) : cveSources.filter((x) => x !== src);
+    // 全关掉没有意义（等于关掉在线检索），至少留一个源。
+    if (next.length === 0) {
+      toast.error("至少要保留一个检索来源");
+      return;
+    }
+    setCveSources(next); // optimistic
+    saveCVE({ cve_online_sources: next.join(",") });
+  };
+
+  const saveNVDKey = () => {
+    api
+      .setSettings({ nvd_api_key: nvdKeyInput })
+      .then((s) => {
+        apply(s);
+        setNvdKeyInput("");
+        toast.success("已保存 NVD API Key");
+      })
+      .catch((e) => toast.error("保存失败：" + (e as Error).message));
+  };
+
+  const saveGHToken = () => {
+    api
+      .setSettings({ github_search_token: ghTokenInput })
+      .then((s) => {
+        apply(s);
+        setGhTokenInput("");
+        toast.success("已保存 GitHub Token");
+      })
+      .catch((e) => toast.error("保存失败：" + (e as Error).message));
+  };
+
+  // 拿当前表单值真跑一次检索（未保存的 key/代理也能测），把失败原因如实展示。
+  const runTestCVE = () => {
+    setCveTesting(true);
+    api
+      .testCVEOnline({
+        cve_online_sources: cveSources.join(","),
+        nvd_api_key: nvdKeyInput,
+        github_search_token: ghTokenInput,
+        cve_online_proxy: cveProxyInput.trim(),
+      })
+      .then((r) => {
+        if (r.ok) {
+          const deg = r.degraded && r.degraded.length > 0 ? `（降级：${r.degraded.join("、")}）` : "";
+          toast.success(`漏洞情报测试成功 · ${r.count} 条结果 · ${r.ms}ms${deg}`);
+        } else {
+          const detail = r.failed && r.failed.length > 0 ? `（${r.failed[0]}）` : "";
+          toast.error("漏洞情报测试失败：" + (r.error || "未知错误") + detail);
+        }
+      })
+      .catch((e) => toast.error("漏洞情报测试失败：" + (e as Error).message))
+      .finally(() => setCveTesting(false));
+  };
+
+  // 打开总开关但两个可选来源都没配 key：能用，但额度很低，必须提示。
+  const cveNoKeys = cveOnline && !nvdKeySet && !ghTokenSet;
 
   const saveCredentialOptions = async (patch: Partial<Settings>) => {
     setSavingCredentials(true);
@@ -1255,6 +1355,176 @@ export default function SystemSettingsPage() {
                 >
                   {testing ? "测试中…" : "测试搜索"}
                 </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="mb-4 break-inside-avoid md:mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <ShieldAlertIcon className="size-4" />
+              漏洞情报（在线检索）
+            </CardTitle>
+            <CardDescription>
+              给 <b>cve_lookup</b> 补上「本地模板库还没收录」的那段时间窗口。镜像内置的 nuclei
+              模板库是快照，刚披露的 CVE 往往还没有模板；打开这里的在线检索后，
+              <b>本地零命中时</b>会自动去 NVD / OSV / GitHub 查该 CVE 的 CVSS、是否已被野外利用（CISA
+              KEV）、受影响版本区间和公开 PoC 链接，交给模型自己判断怎么利用。
+              <br />
+              在线结果<b>没有可执行命令</b>，仍需模型自己构造请求验证。三个源<b>不配 Key 也能用</b>，Key
+              只影响额度与速度。这里的代理是<b>独立出口</b>，不会复用上面的全局代理（那是打目标的出口）。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-4">
+            <div className="flex items-center justify-between gap-4">
+              <Label htmlFor="cve-online" className="text-sm font-normal text-muted-foreground">
+                {cveOnline
+                  ? "已开启 · 本地无模板时自动补充在线情报"
+                  : "已关闭 · cve_lookup 只查本地模板库，不发起任何网络请求"}
+              </Label>
+              <Switch
+                id="cve-online"
+                checked={cveOnline}
+                disabled={!loaded || savingCVE}
+                onCheckedChange={(v) => {
+                  setCveOnline(v); // optimistic
+                  saveCVE({ cve_online_enabled: v });
+                }}
+              />
+            </div>
+
+            {cveOnline && (
+              <div className="border-border/60 flex flex-col gap-4 rounded-md border p-3">
+                <div className="flex flex-col gap-2">
+                  <Label className="text-sm font-normal text-muted-foreground">检索来源</Label>
+                  {(
+                    [
+                      { key: "nvd", label: "NVD（NIST 官方库）", hint: "CVSS / CISA KEV / 版本区间 / 参考链接" },
+                      { key: "osv", label: "OSV（开源生态）", hint: "npm / PyPI / Go / Packagist 的包级版本区间" },
+                      { key: "github", label: "GitHub PoC 搜索", hint: "公开利用代码数量与仓库链接" },
+                    ] as const
+                  ).map((src) => (
+                    <div key={src.key} className="flex items-center justify-between gap-4">
+                      <div className="flex flex-col">
+                        <span className="text-sm">{src.label}</span>
+                        <span className="text-muted-foreground text-xs">{src.hint}</span>
+                      </div>
+                      <Switch
+                        checked={cveSources.includes(src.key)}
+                        disabled={!loaded || savingCVE}
+                        onCheckedChange={(v) => toggleSource(src.key, v)}
+                      />
+                    </div>
+                  ))}
+                  <p className="text-muted-foreground text-xs leading-relaxed">
+                    EPSS（利用概率评分）随 NVD 一起取，无需单独开关。
+                  </p>
+                </div>
+
+                {cveNoKeys && (
+                  <p className="text-xs text-amber-500">
+                    尚未配置任何 Key —— 功能<b>可用</b>，但额度很低：NVD 5 次/30 秒、GitHub 搜索 10
+                    次/分钟。建议至少配一个 NVD Key（免费，额度提到 50 次/30 秒）。
+                  </p>
+                )}
+
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="nvd-key" className="text-sm font-normal text-muted-foreground">
+                    NVD API Key（可选）
+                    {nvdKeySet && <span className="ml-2 text-xs text-emerald-500">已配置</span>}
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="nvd-key"
+                      type="password"
+                      autoComplete="off"
+                      placeholder={nvdKeySet ? "已配置（留空则不变）" : "输入 NVD API Key（可留空）"}
+                      value={nvdKeyInput}
+                      disabled={!loaded || savingCVE}
+                      onChange={(e) => setNvdKeyInput(e.target.value)}
+                    />
+                    <Button
+                      type="button"
+                      onClick={saveNVDKey}
+                      disabled={!loaded || savingCVE || nvdKeyInput.trim() === ""}
+                    >
+                      保存
+                    </Button>
+                  </div>
+                  <p className="text-muted-foreground text-xs">
+                    免费申请：https://nvd.nist.gov/developers/request-an-api-key
+                  </p>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="gh-token" className="text-sm font-normal text-muted-foreground">
+                    GitHub Token（可选）
+                    {ghTokenSet && <span className="ml-2 text-xs text-emerald-500">已配置</span>}
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="gh-token"
+                      type="password"
+                      autoComplete="off"
+                      placeholder={ghTokenSet ? "已配置（留空则不变）" : "输入 GitHub Token（可留空）"}
+                      value={ghTokenInput}
+                      disabled={!loaded || savingCVE}
+                      onChange={(e) => setGhTokenInput(e.target.value)}
+                    />
+                    <Button
+                      type="button"
+                      onClick={saveGHToken}
+                      disabled={!loaded || savingCVE || ghTokenInput.trim() === ""}
+                    >
+                      保存
+                    </Button>
+                  </div>
+                  <p className="text-muted-foreground text-xs">
+                    只用于 PoC 搜索提额（未认证 10 次/分钟）。只需 public_repo 读权限，建议用 fine-grained
+                    token。
+                  </p>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="cve-proxy" className="text-sm font-normal text-muted-foreground">
+                    出口代理（可选）
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id="cve-proxy"
+                      placeholder="http://127.0.0.1:7890 / socks5://… （留空=直连）"
+                      value={cveProxyInput}
+                      disabled={!loaded || savingCVE}
+                      onChange={(e) => setCveProxyInput(e.target.value)}
+                    />
+                    <Button
+                      type="button"
+                      onClick={() => saveCVE({ cve_online_proxy: cveProxyInput.trim() })}
+                      disabled={!loaded || savingCVE}
+                    >
+                      保存
+                    </Button>
+                  </div>
+                  <p className="text-muted-foreground text-xs">
+                    仅用于访问情报源。<b>不要填全局代理</b>——那是打目标的出口，混用会污染流量留痕。
+                  </p>
+                </div>
+
+                <div className="flex items-center justify-between gap-4">
+                  <p className="text-muted-foreground text-xs">
+                    测试会真跑一次 CVE-2021-44228 检索（不吃缓存），能立刻看出 Key / 代理 / 限流问题。
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={runTestCVE}
+                    disabled={!loaded || cveTesting}
+                    className="shrink-0"
+                  >
+                    {cveTesting ? "测试中…" : "测试检索"}
+                  </Button>
+                </div>
               </div>
             )}
           </CardContent>

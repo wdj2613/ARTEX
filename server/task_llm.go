@@ -593,6 +593,7 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	wk.SetRunTimeout(time.Duration(s.agentRunSeconds("worker")) * time.Second)
 	wk.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
 	wk.SetWebSearch(s.webSearchFor("worker"))
+	wk.SetCVEOnline(s.m.CVEOnlineOpts())             // 在线漏洞情报（总开关在设置页；零值=只查本地模板库）
 	wk.SetConstraintInject(s.constraintInjectWorker) // 操作约束注入 worker(可配置,默认开)
 	pl := agent.NewPlanner(plannerRuntime, "task-router", s.m.dir, tx, plannerRuntime.CompactionWindow(), s.agentMaxTurns("planner"))
 	pl.SetFindingRecorder(s.evidenceStore())
@@ -604,6 +605,7 @@ func (s *Server) agentsForTask(t *Task) *taskAgentBundle {
 	pl.SetSteerWork(s.engine.SteerWork)
 	pl.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
 	pl.SetWebSearch(s.webSearchFor("planner"))
+	pl.SetCVEOnline(s.m.CVEOnlineOpts())
 	pl.SetConstraintInject(s.constraintInjectPlanner) // 操作约束注入 planner(可配置,默认开)
 	// cold-digest §7: 冷节点后台压缩。引擎经权威解析器实际驱动的就是这套 per-task planner
 	// (agentsForTask),Compactor 必须接在这里。走任务路由的 planner provider(§4:与 agent
@@ -663,6 +665,7 @@ func (s *Server) workerForTaskSlot(t *Task, slot WorkerSlot) (*agent.Worker, err
 	worker.SetRunTimeout(time.Duration(s.agentRunSeconds("worker")) * time.Second)
 	worker.SetProxy(s.m.ProxyAddr(), s.m.ProxyCACert())
 	worker.SetWebSearch(s.webSearchFor("worker"))
+	worker.SetCVEOnline(s.m.CVEOnlineOpts())
 	worker.SetConstraintInject(s.constraintInjectWorker)
 	bundle.pinnedWorkers[id] = worker
 	return worker, nil

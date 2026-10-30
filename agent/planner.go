@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Autumn-27/artex/cveonline"
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/norma/agentcore"
@@ -33,6 +34,7 @@ type Planner struct {
 	proxyAddr         string                                 // recording proxy for WebFetch (empty = direct)
 	proxyCACert       string                                 // recording proxy's CA cert path (HTTPS verify)
 	webSearch         WebSearchOpts                          // web_search tool backend selection (off by default)
+	cveOnline         cveonline.Opts                         // 在线漏洞情报（设置页总开关；零值=只查本地模板库）
 	workDir           string                                 // shared work dir (surfaced in prompt as artifact-output target)
 	injectConstraints func() bool                            // resolver: inject task operation constraints into system prompt? (nil = yes)
 	nonStreamingFn    func() bool                            // resolver: use non-streaming (Complete) path? (nil = streaming)
@@ -94,6 +96,9 @@ func (p *Planner) SetProxy(addr, caCert string) { p.proxyAddr, p.proxyCACert = a
 
 // SetWebSearch selects the web_search backend for the planner (off by default).
 func (p *Planner) SetWebSearch(o WebSearchOpts) { p.webSearch = o }
+
+// SetCVEOnline 注入在线漏洞情报配置（cve_lookup 的在线补充）。零值 = 关闭。
+func (p *Planner) SetCVEOnline(o cveonline.Opts) { p.cveOnline = o }
 
 // SetConstraintInject wires a resolver deciding whether this task's operation
 // constraints get injected into the planner system prompt. Read per round so the
@@ -365,8 +370,9 @@ func (p *Planner) Plan(ctx context.Context, taskID int64, as *db.AssetStore, ts 
 	}
 	tsx.SetTaskID(taskID)
 	tsx.SetCoverageEnabled(as == nil || as.CoverageEnabled(taskID))
-	tsx.killWork = p.killWork   // enable kill_work tool (nil = unavailable)
-	tsx.steerWork = p.steerWork // enable steer_work tool (nil = unavailable)
+	tsx.SetCVEOnline(p.cveOnline) // 在线漏洞情报（零值=只查本地模板库）
+	tsx.killWork = p.killWork     // enable kill_work tool (nil = unavailable)
+	tsx.steerWork = p.steerWork   // enable steer_work tool (nil = unavailable)
 	if origin, _ := ts.OriginFactID(); origin > 0 {
 		tsx.SetOwnerNode(origin) // planner-side anchors default to the task root (origin fact)
 	}

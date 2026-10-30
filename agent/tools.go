@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/Autumn-27/artex/cveonline"
 	"github.com/Autumn-27/artex/db"
 	acperm "github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
@@ -64,6 +65,10 @@ type ToolSet struct {
 	ts              *db.ExplorationStore
 	worker          string
 	taskID          int64 // PG tasks.id; 0 when unknown (tests / orchestrator cross-task reads)
+	// cveOnline 是在线漏洞情报的配置（设置页总开关 + 源 + key + 代理）。零值 = 关闭，
+	// 此时 cve_lookup 只查本地模板库、完全不出网。由 server 按 agent 构建时注入，
+	// 与 webSearch 的注入路径一致（配置改动需要重建 agent 才生效）。
+	cveOnline cveonline.Opts
 	// coverageDisabled mirrors tasks.coverage_enabled=false. Stored inverted so the
 	// zero value (all existing ToolSet constructions) means ENABLED — matching the
 	// DB default (true). When true: graphOverviewData drops the coverage block, the
@@ -179,6 +184,10 @@ func NewToolSet(ts *db.ExplorationStore, worker string) *ToolSet {
 // SetTaskID sets the PG task id on this ToolSet so that report_finding can
 // dual-write to the standalone findings table (which survives task deletion).
 func (t *ToolSet) SetTaskID(id int64) { t.taskID = id }
+
+// SetCVEOnline 注入在线漏洞情报配置。零值 = 关闭（cve_lookup 只查本地模板库）。
+// 与 SetWebSearch 同样的语义：配置在 agent 构建时烘进 ToolSet，改设置后需要重建。
+func (t *ToolSet) SetCVEOnline(o cveonline.Opts) { t.cveOnline = o }
 
 // SetCoverageEnabled records whether this task has the asset-coverage feature on
 // (default enabled). Passing false makes graphOverviewData omit the coverage block

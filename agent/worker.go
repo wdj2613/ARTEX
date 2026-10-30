@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Autumn-27/artex/cveonline"
 	"github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/norma/agentcore"
@@ -59,6 +60,7 @@ type Worker struct {
 	proxyAddr       string
 	proxyCACert     string            // recording proxy's CA cert path (for WebFetch HTTPS verify)
 	webSearch       WebSearchOpts     // web_search tool backend selection (off by default)
+	cveOnline       cveonline.Opts    // 在线漏洞情报（设置页总开关；零值=只查本地模板库）
 	tx              *transcript.Store // raw LLM conversation persistence (nil = off)
 	window          int               // context window in tokens (for compaction)
 	windowFn        func() int        // optional dynamic task-chain minimum
@@ -191,6 +193,9 @@ func (w *Worker) SetProxy(addr, caCert string) { w.proxyAddr, w.proxyCACert = ad
 // SetWebSearch selects the web_search backend for this worker (off by default).
 func (w *Worker) SetWebSearch(o WebSearchOpts) { w.webSearch = o }
 
+// SetCVEOnline 注入在线漏洞情报配置（cve_lookup 的在线补充）。零值 = 关闭。
+func (w *Worker) SetCVEOnline(o cveonline.Opts) { w.cveOnline = o }
+
 // proxyEnv builds the Bash-subprocess env that routes child-command HTTP through
 // the egress proxy (the recording MITM when capture is on, or the global proxy
 // directly when it is off) and, only when a MITM CA is present, makes the common
@@ -311,6 +316,7 @@ func workerCVESpec() string {
 		"- **必须 `-jsonl` 落盘**：`next` 已带 `-jsonl -o cve-<CVE>.jsonl`，命中后读该文件——里面的 `request` / `response` 就是证据，直接用于 `report_finding(vulnclass=\"<CVE 号>\")`。不要把命令输出截个屏就当证据。\n" +
 		"- **未命中就是没命中**：模板没命中说明该候选在当前目标上不成立，用 `record_fact` 记一条 inferred（试了哪个 CVE、什么结果），不要硬报 finding，也不要因此判定\"目标没有已知漏洞\"。\n" +
 		"- **多个候选写进同一条意图批量跑**：一条意图里循环跑多个模板；**不要**一个 CVE 派一条意图——摘要只差 CVE 号时相似度约 0.89，会被去重闸判成重复、白烧预算。\n" +
+		"- **本地没有模板时（刚披露的 CVE）**：`cve_lookup` 会自动查**在线情报**（需在设置里开启），给出 CVSS、是否已被野外利用（KEV）、受影响版本区间和公开 PoC 链接。这些**没有可执行命令**——先按 `affected` 判断目标版本是否落在区间内，再读 `refs` / `poc_samples` 里的 PoC 自己构造请求验证。**在线匹配同样不是 finding**。\n" +
 		"- **模板目录是 `/root/nuclei-templates`**（nuclei 默认目录，已随镜像内置约 1.4 万个模板）。跑整批时用 `nuclei -u <target> -tags cve -rl 100 -jsonl -o nuclei.jsonl`，**不要**执行 `-update`（容器内更新会写入非持久化路径，重建即丢）。\n" +
 		"- **边界不变**：`cve_lookup` 只给候选和命令，**版本/CVE 匹配永远不等于漏洞已存在**——没真实触发就不能进 finding。"
 }
@@ -424,6 +430,7 @@ func (w *Worker) execute(ctx context.Context, name string, taskID int64, as *db.
 	tsx.SetOwnerNode(intent.ID)         // assets this worker discovers anchor to its intent → visible to the task
 	tsx.SetEnrich(enr)                  // async DNS/HTTP auto-completion for assets this worker writes
 	tsx.SetNotifyFinding(notifyFinding) // report_finding 落库时当场唤醒 planner，带上「哪个意图+finding」
+	tsx.SetCVEOnline(w.cveOnline)       // 在线漏洞情报（零值=只查本地模板库）
 	// base = built-in worker tools ∪ host tools (traffic) ∪ default tools (incl. Bash);
 	// then augment with the agent's visible skills/MCP. During the SDK settlement
 	// phase, Bash is hidden via Settlement.DisabledTools (no local gating needed).

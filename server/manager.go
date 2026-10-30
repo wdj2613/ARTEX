@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Autumn-27/artex/agent"
+	"github.com/Autumn-27/artex/cveonline"
 	pgdb "github.com/Autumn-27/artex/db"
 	"github.com/Autumn-27/artex/enrich"
 	"github.com/Autumn-27/artex/guard"
@@ -254,6 +255,12 @@ type Manager struct {
 	braveKey         string
 	tavilyKey        string
 	webSearchProxy   string
+	// 在线漏洞情报（默认关）。key 只影响额度，不影响可用性。
+	cveOnlineOn      bool
+	cveOnlineSources []string
+	nvdKey           string
+	githubSearchTok  string
+	cveOnlineProxy   string
 	// globalProxy is the egress proxy all target traffic routes through
 	// (http/https/socks5, optional user:pass). Empty = direct. When traffic
 	// capture is on it becomes the MITM's upstream; when capture is off it is
@@ -317,11 +324,20 @@ const (
 	// settingAgentKnowledgeQueryBudget 是每个任务允许的**不同**关键词条数（同词重复搜索
 	// 不占额度）。默认 6，见 agent/knowledge.go 的去重与预算逻辑。
 	settingAgentKnowledgeQueryBudget = "agent_knowledge_query_budget"
-	settingWebSearchOn               = "web_search_enabled"
-	settingWebSearchBackend          = "web_search_backend"
-	settingBraveKey                  = "brave_search_api_key"
-	settingTavilyKey                 = "tavily_search_api_key"
-	settingWebSearchProxy            = "web_search_proxy"
+	// 在线漏洞情报（cve_lookup 的在线补充）。默认关：关闭时 cve_lookup 只查本地
+	// nuclei 模板库、一次网络请求都不发。打开后本地零命中会自动查 NVD/OSV/GitHub/EPSS。
+	// 与 web_search 的关键区别：这里**缺 key 不关闭功能**——三个源不配 key 都能工作，
+	// key 只提升额度（NVD 5→50 次/30s、GitHub 10 次/分→token 后更高）。
+	settingCVEOnlineOn      = "cve_online_enabled"
+	settingCVEOnlineSources = "cve_online_sources"
+	settingNVDKey           = "nvd_api_key"
+	settingGitHubSearchTok  = "github_search_token"
+	settingCVEOnlineProxy   = "cve_online_proxy"
+	settingWebSearchOn      = "web_search_enabled"
+	settingWebSearchBackend = "web_search_backend"
+	settingBraveKey         = "brave_search_api_key"
+	settingTavilyKey        = "tavily_search_api_key"
+	settingWebSearchProxy   = "web_search_proxy"
 	// settingGlobalProxy is the global egress proxy for all target traffic
 	// (http/https/socks5). Empty = direct. Distinct from web_search_proxy (which
 	// only routes the search backend) and the per-profile LLM proxy.
@@ -656,6 +672,22 @@ func NewManager(dir, proxyAddr string) (*Manager, error) {
 	if v, ok, _ := pg.GetSetting(settingWebSearchProxy); ok {
 		m.webSearchProxy = v
 	}
+	// 在线漏洞情报（默认关；源默认 nvd+osv+github）。
+	m.cveOnlineOn = pg.GetBool(settingCVEOnlineOn, false)
+	if v, ok, _ := pg.GetSetting(settingCVEOnlineSources); ok {
+		m.cveOnlineSources = cveonline.ParseSources(v)
+	} else {
+		m.cveOnlineSources = append([]string{}, cveonline.DefaultSources...)
+	}
+	if v, ok, _ := pg.GetSetting(settingNVDKey); ok {
+		m.nvdKey = strings.TrimSpace(v)
+	}
+	if v, ok, _ := pg.GetSetting(settingGitHubSearchTok); ok {
+		m.githubSearchTok = strings.TrimSpace(v)
+	}
+	if v, ok, _ := pg.GetSetting(settingCVEOnlineProxy); ok {
+		m.cveOnlineProxy = strings.TrimSpace(v)
+	}
 	// Global egress proxy (default: direct). When capture is on, feed it to the
 	// MITM as its upstream so recorded traffic exits through it; when capture is
 	// off, ProxyAddr hands it to agents directly (bash env / WebFetch).
@@ -853,6 +885,77 @@ func (m *Manager) SetWebSearch(on bool, backend string, braveKey, tavilyKey, pro
 		m.webSearchProxy = p
 		m.mu.Unlock()
 	}
+	return nil
+}
+
+// CVEOnline 返回在线漏洞情报的当前配置。
+func (m *Manager) CVEOnline() (on bool, sources []string, nvdKey, githubToken, proxy string) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	src := append([]string{}, m.cveOnlineSources...)
+	if len(src) == 0 {
+		src = append([]string{}, cveonline.DefaultSources...)
+	}
+	return m.cveOnlineOn, src, m.nvdKey, m.githubSearchTok, m.cveOnlineProxy
+}
+
+// CVEOnlineOpts 组装成 agent/cveonline 层用的配置。
+//
+// 与 WebSearchOpts 的**关键区别**：这里不会因为"选了源却没配 key"而关闭功能。
+// NVD/OSV/EPSS 不配 key 都能用，GitHub 未认证也还能查（10 次/分钟）；缺 key 只是
+// 额度低，出参里会标 degraded 让模型知道，而不是让工具整个消失。
+func (m *Manager) CVEOnlineOpts() cveonline.Opts {
+	on, src, nvdKey, ghTok, proxy := m.CVEOnline()
+	return cveonline.Opts{Enabled: on, Sources: src, NVDKey: nvdKey, GitHubToken: ghTok, Proxy: proxy}
+}
+
+// SetCVEOnline 持久化并应用在线漏洞情报配置。nvdKey / githubToken / proxy 为 nil 时
+// 保持已存值不动（切换开关不会清空 key）；传指针指向 "" 才清空。
+// 调用方之后需重建 agent（applyLLM），因为配置是在构建 ToolSet 时烘进去的。
+func (m *Manager) SetCVEOnline(on bool, sources []string, nvdKey, githubToken, proxy *string) error {
+	if len(sources) == 0 {
+		sources = append([]string{}, cveonline.DefaultSources...)
+	}
+	joined := strings.Join(sources, ",")
+	if err := m.pg.SetBool(settingCVEOnlineOn, on); err != nil {
+		return err
+	}
+	if err := m.pg.SetSetting(settingCVEOnlineSources, joined); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.cveOnlineOn = on
+	m.cveOnlineSources = append([]string{}, sources...)
+	m.mu.Unlock()
+	if nvdKey != nil {
+		v := strings.TrimSpace(*nvdKey)
+		if err := m.pg.SetSetting(settingNVDKey, v); err != nil {
+			return err
+		}
+		m.mu.Lock()
+		m.nvdKey = v
+		m.mu.Unlock()
+	}
+	if githubToken != nil {
+		v := strings.TrimSpace(*githubToken)
+		if err := m.pg.SetSetting(settingGitHubSearchTok, v); err != nil {
+			return err
+		}
+		m.mu.Lock()
+		m.githubSearchTok = v
+		m.mu.Unlock()
+	}
+	if proxy != nil {
+		v := strings.TrimSpace(*proxy)
+		if err := m.pg.SetSetting(settingCVEOnlineProxy, v); err != nil {
+			return err
+		}
+		m.mu.Lock()
+		m.cveOnlineProxy = v
+		m.mu.Unlock()
+	}
+	// 配置变了，旧缓存里的结果（尤其是降级状态）不再适用。
+	cveonline.Invalidate()
 	return nil
 }
 
