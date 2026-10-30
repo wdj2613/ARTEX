@@ -25,10 +25,11 @@ import (
 // intentProgress 是写入 payload.progress 的结构。字段刻意为空时省略，便于规划者一眼看出
 // "这条什么都没汇报过"。
 type intentProgress struct {
-	Completed []string `json:"completed,omitempty"`
-	Remaining []string `json:"remaining,omitempty"`
-	NextStep  string   `json:"next_step,omitempty"`
-	Note      string   `json:"note,omitempty"`
+	Blocker   *sharedBlocker `json:"blocker,omitempty"`
+	Completed []string       `json:"completed,omitempty"`
+	Remaining []string       `json:"remaining,omitempty"`
+	NextStep  string         `json:"next_step,omitempty"`
+	Note      string         `json:"note,omitempty"`
 	// Auto=true 表示这条记录是引擎在终局时按产出自动补的，不是 worker 自己的汇报。
 	Auto bool `json:"auto,omitempty"`
 	// Terminal 记录终态原因（exhausted 的来源：max_turns / timeout / killed / error）。
@@ -68,13 +69,15 @@ func (t *ToolSet) reportProgress() actool.CoreTool {
 			"remaining": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "还没做完的候选清单——这是规划者决定要不要续跑、怎么续跑的关键，尽量具体"},
 			"next_step": str("下一步打算怎么做（一句话）；若已无剩余工作可留空"),
 			"note":      str("补充说明（可选）：卡在哪、被什么挡住、复用了哪个脚本"),
+			"blocker":   obj(map[string]any{"key": str("公共资源短名，不含 URL/凭据，如 egress-proxy"), "state": str("blocked 或 resolved"), "evidence": str("已核实的公共故障或恢复依据；不是单次目标失败")}, "key", "state", "evidence"),
 		}),
 		func(_ context.Context, in json.RawMessage) (actool.Result, error) {
 			var a struct {
-				Completed []string `json:"completed"`
-				Remaining []string `json:"remaining"`
-				NextStep  string   `json:"next_step"`
-				Note      string   `json:"note"`
+				Completed []string        `json:"completed"`
+				Remaining []string        `json:"remaining"`
+				NextStep  string          `json:"next_step"`
+				Note      string          `json:"note"`
+				Blocker   json.RawMessage `json:"blocker"`
 			}
 			_ = json.Unmarshal(in, &a)
 			node := t.ownerNode
@@ -88,7 +91,31 @@ func (t *ToolSet) reportProgress() actool.CoreTool {
 				Note:      truncateRunes(strings.TrimSpace(a.Note), 300),
 				At:        nowStr(),
 			}
-			if len(prog.Completed) == 0 && len(prog.Remaining) == 0 && prog.NextStep == "" && prog.Note == "" {
+			blocker, err := prepareSharedBlocker(a.Blocker, node)
+			if err != nil {
+				return actool.Errorf(err.Error()), nil
+			}
+			if blocker != nil && len(prog.Completed) == 0 && len(prog.Remaining) == 0 && prog.NextStep == "" && prog.Note == "" {
+				if old, e := t.ts.IntentProgress(node); e == nil && old != nil {
+					if v, ok := old["completed"].([]any); ok {
+						for _, item := range v {
+							if s, ok := item.(string); ok {
+								prog.Completed = append(prog.Completed, s)
+							}
+						}
+					}
+					if v, ok := old["remaining"].([]any); ok {
+						for _, item := range v {
+							if s, ok := item.(string); ok {
+								prog.Remaining = append(prog.Remaining, s)
+							}
+						}
+					}
+					prog.NextStep, _ = old["next_step"].(string)
+					prog.Note, _ = old["note"].(string)
+				}
+			}
+			if len(prog.Completed) == 0 && len(prog.Remaining) == 0 && prog.NextStep == "" && prog.Note == "" && blocker == nil {
 				return actool.Errorf("至少要给 completed / remaining / next_step / note 之一"), nil
 			}
 			raw, err := json.Marshal(prog)
@@ -97,6 +124,13 @@ func (t *ToolSet) reportProgress() actool.CoreTool {
 			}
 			var asMap map[string]any
 			_ = json.Unmarshal(raw, &asMap)
+			if blocker != nil {
+				asMap["blocker"] = blocker
+			} else if old, e := t.ts.IntentProgress(node); e == nil && old != nil {
+				if b, ok := old["blocker"]; ok {
+					asMap["blocker"] = b
+				}
+			}
 			if err := t.ts.SetIntentProgress(node, asMap); err != nil {
 				return actool.Errorf(fmt.Sprintf("写入进度失败: %v", err)), nil
 			}
@@ -114,7 +148,7 @@ func progressBrief(p map[string]any) map[string]any {
 		return nil
 	}
 	out := map[string]any{}
-	for _, k := range []string{"completed", "remaining", "next_step", "terminal", "auto"} {
+	for _, k := range []string{"completed", "remaining", "next_step", "terminal", "auto", "blocker"} {
 		if v, ok := p[k]; ok && v != nil {
 			out[k] = v
 		}

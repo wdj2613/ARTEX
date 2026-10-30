@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Autumn-27/artex/cveonline"
 	"github.com/Autumn-27/artex/db"
@@ -433,6 +434,7 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 	fr, _ := t.ts.Frontier(openIntentsCap) // priority DESC, id ASC —— 优先级最高的前 N 条；真实总数见 frontier_open
 	out["open_intents"] = compactIntents(fr, parentsOf, yieldsOf)
 	all, _ := t.ts.ListByKind(db.KindIntent, 300)
+	out["shared_blockers"] = currentSharedBlockers(all, time.Now().UTC())
 	var running, recentDone []*db.Node
 	for _, n := range all {
 		switch n.State {
