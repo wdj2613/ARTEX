@@ -12,8 +12,10 @@ package db
 // node_detail 53.7%、list_assets 52.7%、get_worker_output 47.4%，而 Bash 只有 10.6%
 // —— 空转集中在只读查询类工具，不在渗透动作上。
 //
-// 第二个信号是「意图有没有产出」：终态意图里 payload.progress.yields 为空/0 的占比
-// （yields 由 report_progress 或引擎终局补写，见 agent/progress.go）。
+// 第二个信号是「意图有没有产出」：只统计终态里明确记录零写回的意图。
+// 引擎写入的历史格式为「事实0 资产0 漏洞0 [情报0]」，兼容旧的数字/字符串 0；
+// 缺失、空白及无法解析的格式是未知，不应伪装成零产出。资产/情报也属于写回，
+// 不能只凭 exploration yields 边判断（见 server/intent_progress.go）。
 //
 // 两个信号都是只读聚合，不新增埋点、不建表：activity 与 exploration_nodes 里本来就有。
 type VoidStats struct {
@@ -27,7 +29,7 @@ type VoidStats struct {
 	RepeatTools []VoidRepeat `json:"repeat_tools"`
 	// TerminalIntents 已进终态的意图数（done/exhausted/blocked/stopped）。
 	TerminalIntents int `json:"terminal_intents"`
-	// ZeroYieldIntents 其中 progress.yields 为空或 0 的条数。
+	// ZeroYieldIntents 其中有明确零写回记录的条数；未记录/未知格式不计零产出。
 	ZeroYieldIntents int `json:"zero_yield_intents"`
 }
 
@@ -87,7 +89,8 @@ ORDER BY (sum(c) - count(*)) DESC, sum(c) DESC`, s.expID, minRepeatSummaryLen)
 
 	if err := s.db.QueryRow(`
 SELECT count(*),
-       count(*) FILTER (WHERE COALESCE(btrim(payload->'progress'->>'yields'), '') IN ('', '0'))
+       count(*) FILTER (WHERE payload->'progress'->>'yields' ~
+         '^[[:space:]]*(0|事实0[[:space:]]+资产0[[:space:]]+漏洞0([[:space:]]+情报0)?)[[:space:]]*$')
 FROM exploration_nodes
 WHERE exploration_id=$1 AND kind='intent'
   AND state IN ('done','exhausted','blocked','stopped')`, s.expID,

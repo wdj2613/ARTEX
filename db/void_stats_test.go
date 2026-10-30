@@ -6,7 +6,7 @@ import "testing"
 //   - 只统计 kind='tool_result' 的行；
 //   - 「完全相同返回」按 (tool, summary) 分组，重复数 = 条数 - 种数；
 //   - 过短摘要（< minRepeatSummaryLen）与错误返回不参与重复判定，但错误单独计数；
-//   - 终态意图（done/exhausted/blocked/stopped）里 progress.yields 为空/0 的算零产出。
+//   - 终态意图只把明确的零写回计为零产出，缺失或异常格式保持未知。
 //
 // 口径为什么不用「同一 URL 重复请求」见 void_stats.go 顶部注释。
 func TestVoidStats(t *testing.T) {
@@ -31,8 +31,8 @@ func TestVoidStats(t *testing.T) {
 		{"list_facts", "同样的图摘要 AAAAAAAAAAAAAAAAAAAAAAAA", false},
 		{"list_facts", "同样的图摘要 AAAAAAAAAAAAAAAAAAAAAAAA", false},
 		{"Bash", "nmap 输出 BBBBBBBBBBBBBBBBBBBBBBBBBBBB", false}, // 唯一内容 → 不重复
-		{"Bash", "连接超时", true},                                    // 错误：单独计数，不进重复判定
-		{"Read", "ok", false},                                    // 过短：不参与重复判定
+		{"Bash", "连接超时", true},                                  // 错误：单独计数，不进重复判定
+		{"Read", "ok", false},                                   // 过短：不参与重复判定
 	}
 	for _, s := range seed {
 		if _, err := es.AppendActivity(Activity{
