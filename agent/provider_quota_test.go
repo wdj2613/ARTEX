@@ -25,6 +25,8 @@ func TestIsQuotaExhaustedMessage(t *testing.T) {
 		`billing_not_active`,
 		`credit balance is too low`,
 		`账户余额不足，请充值`,
+		`openai: status 429: {"error":{"message":"额度已用完，请充值后重试"}}`,
+		`{"error":{"code":"quota_exhausted"}}`,
 	}
 	for _, message := range positive {
 		if !IsQuotaExhaustedMessage(message) {
@@ -46,6 +48,11 @@ func TestIsQuotaExhaustedMessage(t *testing.T) {
 		`status 500: internal server error`,
 		`status=503: insufficient_quota`,
 		`context length exceeded`,
+		`status 429: RPM quota_exhausted`,
+		`status 429: TPM 额度已用完`,
+		`HTTP 401: 额度已用完`,
+		`HTTP 403: quota_exhausted`,
+		`status 503: 额度已用完`,
 	}
 	for _, message := range negative {
 		if IsQuotaExhaustedMessage(message) {
@@ -63,6 +70,8 @@ func TestQuotaAwareTransportOnlyNormalizesExplicitQuota429(t *testing.T) {
 		wantStatus int
 	}{
 		{name: "quota", status: http.StatusTooManyRequests, body: `{"code":"insufficient_quota"}`, wantStatus: http.StatusPaymentRequired},
+		{name: "Chinese quota exhausted", status: http.StatusTooManyRequests, body: `{"message":"额度已用完，请充值"}`, wantStatus: http.StatusPaymentRequired},
+		{name: "quota exhausted code", status: http.StatusTooManyRequests, body: `{"code":"quota_exhausted"}`, wantStatus: http.StatusPaymentRequired},
 		{name: "ordinary rate limit", status: http.StatusTooManyRequests, body: `{"message":"rate limit exceeded"}`, wantStatus: http.StatusTooManyRequests},
 		{name: "server error", status: http.StatusInternalServerError, body: `insufficient_quota`, wantStatus: http.StatusInternalServerError},
 	}
