@@ -2,6 +2,16 @@
 
 本项目的重要变更记录在此文件中，格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### 构建与镜像
+
+- **内置技能改为启动时按文件级三方合并同步（修「镜像里的 skills 更新到不了线上」）**（`Dockerfile` + `start.sh` + 新增 `scripts/sync-skills.sh`）。容器里 `/app/skills` 是宿主绑定挂载——UI 的 `POST /api/skills/upload`、`PUT /api/skills/{name}/files/...` 全写这个目录，所以镜像 `COPY skills/ /app/skills/` 会被挂载**完全遮蔽**：实测 0.4.0→0.4.3 期间对 `skills/` 的所有改进（已装工具表、nuclei `-jsonl` 纪律、`cve_lookup` 提示）一条都没到线上，宿主那份仍停在 10-28 的旧版，`scopesentry` 还被编辑坏成 `http: //<主机>`。现在镜像另存一份不被遮蔽的内置源 `COPY skills/ /app/skills-builtin/`，`start.sh` 启动前调 `scripts/sync-skills.sh` 逐**文件**比对三个 hash（内置旧版 / 内置新版 / 目标现有）后合并：用户改过的文件**永远保留**、用户没改过的跟随镜像更新、用户自建技能与新增文件一律不碰、用户删掉的内置文件不补回、双方都改时保留用户版并把新版另存 `<文件>.incoming`。不能简单用镜像覆盖：那会抹掉用户在 UI 里做的修改和上传的技能。同步状态记在 `<skills>/.skill-sync-state`（普通文件、非 `.md`，`skill.LoadDir` 不当技能、`GET /api/skills` 不列出来）；裸机部署没有内置源目录，脚本自动跳过。场景测试 `scripts/sync-skills.test.sh`（9 场景 20 条断言）。
+
+### 工具链
+
+- **`skills/playwright-cli` 补 `mcps: browser`**：browser MCP 在 `mcp_servers` 里是 enabled 的，缺这个字段时它的工具对所有 agent 全局提前解锁（白占上下文、权限面也更大）；写上后由 norma 的 `mcps` 门控成「加载 playwright-cli 技能时才解锁」（`server/assembly.go` 的 `gated` 集合）。该字段此前只存在于宿主机手工改的副本里、仓库从来没有，换机或重建镜像就丢。
+
 ## [0.4.3] - 2026-10-30
 
 ### 概要

@@ -82,6 +82,13 @@ COPY dist/${TARGETARCH}/artex /app/artex
 COPY start.sh /app/start.sh
 RUN chmod +x /app/artex /app/start.sh
 COPY skills/ /app/skills/
+# 内置技能源：/app/skills 会被宿主 bind mount 完全遮蔽（UI 的技能上传/编辑都写那个
+# 挂载目录），所以镜像里的内置技能必须另存一份不被遮蔽的副本，由 start.sh 在启动时
+# 按【文件级三方合并】同步过去——用户改过的文件保留、用户自建技能不碰、内置更新才落地。
+# 详见 scripts/sync-skills.sh 顶部注释。
+COPY skills/ /app/skills-builtin/
+COPY scripts/sync-skills.sh /app/scripts/sync-skills.sh
+RUN chmod +x /app/scripts/sync-skills.sh
 # 字典随镜像发布（5 个文件共 ~2.1MB）：换机器开箱即用，agent 不必再满世界找字典。
 # 想换更大的字典（如全量 SecLists）：跑 scripts/fetch-wordlists.sh 下载到宿主机，
 # 再用 compose 把该目录挂到 /opt/artex/wordlists 覆盖同名路径（bind mount 天然覆盖内置）。

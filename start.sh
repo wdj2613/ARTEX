@@ -23,6 +23,13 @@ cd "$(dirname "$0")" || exit 1
 BIN=./artex
 [ -x "$BIN" ] || { echo "[artex] 找不到可执行文件 $BIN" >&2; exit 1; }
 
+# 内置技能同步（容器内才有 /app/skills-builtin；裸机部署自动跳过）。
+# 必须在 artex 启动前跑：skill.LoadDir 在 agent 装配时按目录内容加载，晚一步就要等下次重启。
+# 失败不阻断启动——技能旧一点也要比服务起不来强，脚本自己会把原因打到 stderr。
+if [ -x ./scripts/sync-skills.sh ]; then
+	./scripts/sync-skills.sh || echo "[artex] 内置技能同步失败，继续启动" >&2
+fi
+
 RESTART_CODE=75
 MAX_DELAY=60
 
