@@ -17,13 +17,18 @@ export function cn(...inputs: ClassValue[]) {
 // "此刻有没有弹层开着"记录下来,onInteractOutside 再读这个记录值来决定是否放行关闭。
 function isRadixOverlayOpenNow(): boolean {
   if (typeof document === "undefined") return false;
+  // 只认「弹层内容本身」,不认触发器:抽屉/对话框自己的 trigger 在打开时同样是
+  // aria-expanded=true + data-state=open,把它算进来会让判定恒为真,遮罩就再也关不掉。
   return !!document.querySelector(
     [
-      "[data-slot='select-trigger'][data-state='open']",
       "[data-slot='select-content'][data-state='open']",
-      "[role='listbox'][data-state='open']",
+      "[data-slot='popover-content'][data-state='open']",
+      "[data-slot='dropdown-menu-content'][data-state='open']",
+      "[data-slot='context-menu-content'][data-state='open']",
+      "[data-slot='menubar-content'][data-state='open']",
+      "[data-slot='combobox-content']",
       "[data-radix-popper-content-wrapper]",
-      "[aria-expanded='true'][data-state='open']",
+      "[role='listbox'][data-state='open']",
     ].join(","),
   );
 }

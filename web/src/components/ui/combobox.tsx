@@ -86,6 +86,22 @@ function ComboboxInput({
   )
 }
 
+// 弹层默认挂到 body,但抽屉/对话框(Radix)是模态的:模态期间 body 被设成
+// pointer-events:none,且 react-remove-scroll 会拦掉落在锁外元素上的滚动事件。
+// 弹层若留在 body,表现就是「点不中选项(点击穿透到遮罩,抽屉被关掉)」和
+// 「列表滚不动」。所以检测到已打开的模态容器时,把弹层挂进容器内部(改用 fixed
+// 定位,避免被容器自身的 overflow 裁掉);没有模态容器则维持原行为。
+const MODAL_CONTENT_SELECTOR = [
+  '[data-slot="sheet-content"][data-state="open"]',
+  '[data-slot="dialog-content"][data-state="open"]',
+  '[data-slot="alert-dialog-content"][data-state="open"]',
+].join(",")
+
+function resolveModalContainer(): HTMLElement | null {
+  if (typeof document === "undefined") return null
+  return document.querySelector<HTMLElement>(MODAL_CONTENT_SELECTOR)
+}
+
 function ComboboxContent({
   className,
   side = "bottom",
@@ -102,14 +118,18 @@ function ComboboxContent({
   > & {
     portalContainer?: ComboboxPrimitive.Portal.Props["container"]
   }) {
+  const [modalContainer] = React.useState(resolveModalContainer)
+  // 注意:必须回落到 undefined 而不是 null —— base-ui 的 Portal 收到 null 会直接不渲染弹层。
+  const container = portalContainer ?? modalContainer ?? undefined
   return (
-    <ComboboxPrimitive.Portal container={portalContainer}>
+    <ComboboxPrimitive.Portal container={container}>
       <ComboboxPrimitive.Positioner
         side={side}
         sideOffset={sideOffset}
         align={align}
         alignOffset={alignOffset}
         anchor={anchor}
+        positionMethod={container ? "fixed" : undefined}
         className="isolate z-50"
       >
         <ComboboxPrimitive.Popup
