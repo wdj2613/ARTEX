@@ -73,6 +73,7 @@ func AugmentTools(ctx context.Context, agentKey string, base []actool.CoreTool) 
 		def.FindingGuidance = ""
 		def.CaseGuidance += historicalFindingReviewGuidance
 	}
+	out = conditionalReadTools(out)
 	for i, t := range out {
 		out[i] = guardPanic(t)
 	}
