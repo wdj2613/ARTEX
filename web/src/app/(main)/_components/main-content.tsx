@@ -10,6 +10,7 @@ import { useCurrentUser } from "@/hooks/use-current-user";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
+import { LiveClock } from "./live-clock";
 import { AccountSwitcher } from "./sidebar/account-switcher";
 import { LayoutControls } from "./sidebar/layout-controls";
 import { SearchDialog } from "./sidebar/search-dialog";
@@ -71,6 +72,7 @@ function MainContentInner({ children }: { children: ReactNode }) {
           {/* 中间留空撑开，右侧操作区保持靠右 */}
           <div className="min-w-0 flex-1" />
           <div className="flex shrink-0 items-center gap-2">
+            <LiveClock />
             {version && (
               <span className="font-medium text-muted-foreground text-xs tabular-nums">版本 · {version}</span>
             )}

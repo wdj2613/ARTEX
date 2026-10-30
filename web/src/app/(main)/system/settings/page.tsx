@@ -2,7 +2,15 @@
 
 import * as React from "react";
 
-import { CpuIcon, FlaskConicalIcon, KeyboardIcon, RadioTowerIcon, SearchIcon, ShieldAlertIcon } from "lucide-react";
+import {
+  CameraIcon,
+  CpuIcon,
+  FlaskConicalIcon,
+  KeyboardIcon,
+  RadioTowerIcon,
+  SearchIcon,
+  ShieldAlertIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -72,6 +80,10 @@ export default function SystemSettingsPage() {
   const [chatAutoTitleEnabled, setChatAutoTitleEnabled] = React.useState(false);
   const [savingIntelligence, setSavingIntelligence] = React.useState(false);
   const [trafficCapture, setTrafficCapture] = React.useState(false);
+  // 报告截图 / 截图时间标记 / OPSEC 准则（上游 RuoJi6/ARTEX 引入，默认全关）
+  const [browserScreenshot, setBrowserScreenshot] = React.useState(false);
+  const [browserScreenshotTimestamp, setBrowserScreenshotTimestamp] = React.useState(false);
+  const [opsecEnabled, setOpsecEnabled] = React.useState(false);
   const [agentTrafficBinding, setAgentTrafficBinding] = React.useState(false);
   // add_intent 近似去重闸的力度（off/warn/block），默认 warn。
   const [intentDedup, setIntentDedup] = React.useState<"off" | "warn" | "block">("warn");
@@ -140,6 +152,9 @@ export default function SystemSettingsPage() {
     setTaskAutoTitleEnabled(!!s.task_auto_title_enabled);
     setChatAutoTitleEnabled(!!s.chat_auto_title_enabled);
     setTrafficCapture(!!s.traffic_capture);
+    setBrowserScreenshot(!!s.browser_screenshot_enabled);
+    setBrowserScreenshotTimestamp(!!s.browser_screenshot_timestamp_enabled);
+    setOpsecEnabled(!!s.opsec_enabled);
     setAgentTrafficBinding(!!s.agent_traffic_binding);
     setIntentDedup((s.agent_intent_dedup as "off" | "warn" | "block") || "warn");
     setMainAgentBoundary((s.mainagent_direct_action as "off" | "warn" | "block") || "warn");
@@ -283,6 +298,54 @@ export default function SystemSettingsPage() {
       .finally(() => setSaving(false));
   };
 
+  const toggleBrowserScreenshot = (v: boolean) => {
+    setBrowserScreenshot(v);
+    setSaving(true);
+    api
+      .setSettings({ browser_screenshot_enabled: v })
+      .then((s) => {
+        apply(s);
+        toast.success(v ? "已开启浏览器截图工具" : "已关闭浏览器截图工具");
+      })
+      .catch((e) => {
+        setBrowserScreenshot(!v);
+        toast.error(`保存失败：${(e as Error).message}`);
+      })
+      .finally(() => setSaving(false));
+  };
+
+  const toggleBrowserScreenshotTimestamp = (v: boolean) => {
+    setBrowserScreenshotTimestamp(v);
+    setSaving(true);
+    api
+      .setSettings({ browser_screenshot_timestamp_enabled: v })
+      .then((s) => {
+        apply(s);
+        toast.success(v ? "已开启截图时间标记" : "已关闭截图时间标记");
+      })
+      .catch((e) => {
+        setBrowserScreenshotTimestamp(!v);
+        toast.error(`保存失败：${(e as Error).message}`);
+      })
+      .finally(() => setSaving(false));
+  };
+
+  const toggleOpsec = (v: boolean) => {
+    setOpsecEnabled(v);
+    setSaving(true);
+    api
+      .setSettings({ opsec_enabled: v })
+      .then((s) => {
+        apply(s);
+        toast.success(v ? "已开启 OPSEC 准则" : "已关闭 OPSEC 准则");
+      })
+      .catch((e) => {
+        setOpsecEnabled(!v);
+        toast.error(`保存失败：${(e as Error).message}`);
+      })
+      .finally(() => setSaving(false));
+  };
+
   const toggleInjectPlanner = (v: boolean) => {
     setInjectPlanner(v); // optimistic
     api
@@ -409,9 +472,7 @@ export default function SystemSettingsPage() {
   const toggleAutoTitle = (key: "task_auto_title_enabled" | "chat_auto_title_enabled", value: boolean) => {
     const setter = key === "task_auto_title_enabled" ? setTaskAutoTitleEnabled : setChatAutoTitleEnabled;
     const patch: Partial<Settings> =
-      key === "task_auto_title_enabled"
-        ? { task_auto_title_enabled: value }
-        : { chat_auto_title_enabled: value };
+      key === "task_auto_title_enabled" ? { task_auto_title_enabled: value } : { chat_auto_title_enabled: value };
     setter(value);
     api
       .setSettings(patch)
@@ -685,6 +746,66 @@ export default function SystemSettingsPage() {
         <Card className="mb-4 break-inside-avoid md:mb-6">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
+              <CameraIcon className="size-4" />
+              浏览器与报告安全
+            </CardTitle>
+            <CardDescription>
+              集中管理报告截图、截图时间标记与目标交互的 OPSEC 准则。开关只影响后续 Agent 运行。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="divide-y">
+            <div className="flex items-center justify-between gap-4 py-3 first:pt-0">
+              <div className="min-w-0">
+                <Label htmlFor="browser-screenshot" className="text-sm font-medium">
+                  浏览器截图
+                </Label>
+                <p className="text-muted-foreground mt-1 text-xs">
+                  报告撰写 Agent 可使用 browser MCP 为复现步骤保存截图。
+                </p>
+              </div>
+              <Switch
+                id="browser-screenshot"
+                checked={browserScreenshot}
+                disabled={!loaded || saving}
+                onCheckedChange={toggleBrowserScreenshot}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4 py-3">
+              <div className="min-w-0">
+                <Label htmlFor="browser-screenshot-timestamp" className="text-sm font-medium">
+                  截图时间标记
+                </Label>
+                <p className="text-muted-foreground mt-1 text-xs">在截图右上角显示年月日时分秒，不修改原始文件。</p>
+              </div>
+              <Switch
+                id="browser-screenshot-timestamp"
+                checked={browserScreenshotTimestamp}
+                disabled={!loaded || saving}
+                onCheckedChange={toggleBrowserScreenshotTimestamp}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4 py-3 last:pb-0">
+              <div className="min-w-0">
+                <Label htmlFor="opsec-enabled" className="text-sm font-medium">
+                  OPSEC 准则
+                </Label>
+                <p className="text-muted-foreground mt-1 text-xs">
+                  要求执行型 Agent 复用流量与浏览器特征、控制请求噪声，并遵守平台代理与授权范围。
+                </p>
+              </div>
+              <Switch
+                id="opsec-enabled"
+                checked={opsecEnabled}
+                disabled={!loaded || saving}
+                onCheckedChange={toggleOpsec}
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="mb-4 break-inside-avoid md:mb-6">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
               <RadioTowerIcon className="size-4" />
               Agent 自动绑定流量
             </CardTitle>
@@ -866,9 +987,8 @@ export default function SystemSettingsPage() {
               开启<b>流量捕获</b>时，它作为记录代理的<b>上游</b>（流量仍全量落库，再经此代理出网）；关闭捕获时，直接注入
               Agent 的 bash / WebFetch 出网。与网络搜索代理、LLM 代理相互独立。
               <br />
-              <b>提示</b>：socks5 在<b>关闭捕获</b>时依赖各命令行工具对 <code>ALL_PROXY</code> 的支持——curl
-              可用，python urllib 等会直接报错； 若主要用 socks5，建议开启流量捕获——此路径由 MITM
-              亲自拨号，工具无感知、稳定生效。
+              <b>提示</b>：socks5 在<b>关闭捕获</b>时依赖各命令行工具对 <code>ALL_PROXY</code> 的支持——curl 可用，python
+              urllib 等会直接报错； 若主要用 socks5，建议开启流量捕获——此路径由 MITM 亲自拨号，工具无感知、稳定生效。
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
@@ -893,12 +1013,7 @@ export default function SystemSettingsPage() {
                 保存
               </Button>
               {/* 测表单里当前的值，不要求先保存。 */}
-              <Button
-                type="button"
-                variant="outline"
-                onClick={testEgress}
-                disabled={!loaded || egressTesting}
-              >
+              <Button type="button" variant="outline" onClick={testEgress} disabled={!loaded || egressTesting}>
                 {egressTesting ? "测试中…" : "测试"}
               </Button>
             </div>
@@ -907,15 +1022,13 @@ export default function SystemSettingsPage() {
             </p>
             {/* 紧贴结果区：用户看两行时正好需要它。细节放文档。 */}
             <p className="text-muted-foreground text-xs leading-relaxed">
-              点<b>测试</b>会访问 IP 回显服务（默认 <code>api.ipify.org</code>，失败自动换{" "}
-              <code>ifconfig.me</code>），它返回"这个请求从哪个 IP 来"。
-              ① 是不走代理时的 IP，② 是经全局代理出网时的 IP。改完不用先保存，直接测。
+              点<b>测试</b>会访问 IP 回显服务（默认 <code>api.ipify.org</code>，失败自动换 <code>ifconfig.me</code>
+              ），它返回"这个请求从哪个 IP 来"。 ① 是不走代理时的 IP，② 是经全局代理出网时的
+              IP。改完不用先保存，直接测。
             </p>
             {/* 内网里公网回显不可达，两行都会失败——不是代理坏了。 */}
             <details className="text-xs">
-              <summary className="text-muted-foreground cursor-pointer select-none">
-                自定义 IP 探测服务（可选）
-              </summary>
+              <summary className="text-muted-foreground cursor-pointer select-none">自定义 IP 探测服务（可选）</summary>
               <div className="mt-2 flex flex-col gap-1">
                 <Input
                   autoComplete="off"
@@ -927,10 +1040,9 @@ export default function SystemSettingsPage() {
                   }}
                 />
                 <span className="text-muted-foreground leading-relaxed">
-                  自定义 IP 探测服务需返回纯文本 IP 或{" "}
-                  <code>{'{"ip":"1.2.3.4"}'}</code> 格式的 JSON。
-                  若内网环境下无法访问公网，或本机和内网代理共用同一个公网出口，
-                  则可替换为内网 IP 探测服务，此时 ① 和 ② 的 IP 不同，就说明流量走了内网代理。
+                  自定义 IP 探测服务需返回纯文本 IP 或 <code>{'{"ip":"1.2.3.4"}'}</code> 格式的 JSON。
+                  若内网环境下无法访问公网，或本机和内网代理共用同一个公网出口， 则可替换为内网 IP 探测服务，此时 ① 和 ②
+                  的 IP 不同，就说明流量走了内网代理。
                 </span>
               </div>
             </details>
@@ -943,11 +1055,7 @@ export default function SystemSettingsPage() {
                     <div key={c.key} className="flex flex-wrap items-center gap-x-2">
                       <span
                         className={
-                          c.skipped
-                            ? "text-muted-foreground"
-                            : c.result.ok
-                              ? "text-emerald-600"
-                              : "text-destructive"
+                          c.skipped ? "text-muted-foreground" : c.result.ok ? "text-emerald-600" : "text-destructive"
                         }
                       >
                         {c.skipped ? "—" : c.result.ok ? "✓" : "✗"}
@@ -969,18 +1077,12 @@ export default function SystemSettingsPage() {
                         <span className="text-muted-foreground">{c.skip_reason}</span>
                       ) : c.result.ok ? (
                         <span className="font-mono">
-                          <span title="外界看到的出口 IP（探测站点回显的客户端地址）">
-                            {c.result.exit_ip}
-                          </span>{" "}
-                          ·{" "}
+                          <span title="外界看到的出口 IP（探测站点回显的客户端地址）">{c.result.exit_ip}</span> ·{" "}
                           <span title="从 ARTEX 发出请求到拿到响应的完整往返耗时；经代理时包含代理那一跳">
                             {c.result.latency_ms}ms
                           </span>
                           {c.result.via && c.result.via !== "direct" && !viaCapture && (
-                            <span className="text-muted-foreground">
-                              {" "}
-                              · 经 {c.result.via_label ?? c.result.via}
-                            </span>
+                            <span className="text-muted-foreground"> · 经 {c.result.via_label ?? c.result.via}</span>
                           )}
                         </span>
                       ) : (
@@ -1073,7 +1175,9 @@ export default function SystemSettingsPage() {
         <Card className="mb-4 break-inside-avoid md:mb-6">
           <CardHeader>
             <CardTitle>自动标题</CardTitle>
-            <CardDescription>为 Agent 创建的任务和对话首条消息生成简短标题。两个开关独立生效，默认关闭。</CardDescription>
+            <CardDescription>
+              为 Agent 创建的任务和对话首条消息生成简短标题。两个开关独立生效，默认关闭。
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <Field orientation="horizontal">
@@ -1091,7 +1195,9 @@ export default function SystemSettingsPage() {
             <Field orientation="horizontal" className="mt-5">
               <FieldContent>
                 <FieldLabel htmlFor="chat-auto-title">会话标题</FieldLabel>
-                <FieldDescription>对话首条消息后自动生成会话标题；先显示消息截断文本，失败时保留截断标题。</FieldDescription>
+                <FieldDescription>
+                  对话首条消息后自动生成会话标题；先显示消息截断文本，失败时保留截断标题。
+                </FieldDescription>
               </FieldContent>
               <Switch
                 id="chat-auto-title"
@@ -1367,8 +1473,8 @@ export default function SystemSettingsPage() {
               漏洞情报（在线检索）
             </CardTitle>
             <CardDescription>
-              给 <b>cve_lookup</b> 补上「本地模板库还没收录」的那段时间窗口。镜像内置的 nuclei
-              模板库是快照，刚披露的 CVE 往往还没有模板；打开这里的在线检索后，
+              给 <b>cve_lookup</b> 补上「本地模板库还没收录」的那段时间窗口。镜像内置的 nuclei 模板库是快照，刚披露的
+              CVE 往往还没有模板；打开这里的在线检索后，
               <b>本地零命中时</b>会自动去 NVD / OSV / GitHub 查该 CVE 的 CVSS、是否已被野外利用（CISA
               KEV）、受影响版本区间和公开 PoC 链接，交给模型自己判断怎么利用。
               <br />
@@ -1481,8 +1587,7 @@ export default function SystemSettingsPage() {
                     </Button>
                   </div>
                   <p className="text-muted-foreground text-xs">
-                    只用于 PoC 搜索提额（未认证 10 次/分钟）。只需 public_repo 读权限，建议用 fine-grained
-                    token。
+                    只用于 PoC 搜索提额（未认证 10 次/分钟）。只需 public_repo 读权限，建议用 fine-grained token。
                   </p>
                 </div>
 

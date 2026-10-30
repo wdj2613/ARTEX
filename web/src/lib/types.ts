@@ -327,6 +327,8 @@ export interface CoverageGraphNode {
   app_name?: string;
   page_title?: string;
   status_code?: number;
+  zone?: "internet" | "boundary" | "internal";
+  zone_reason?: string;
 }
 
 export interface CoverageGraphEdge {
@@ -527,6 +529,7 @@ export interface Finding {
   summary: string;
   evidence: string;
   report?: string; // 详细报告(Markdown);仅详情接口返回,列表为空
+  report_conversation_id?: number;
   intent_id?: string;
   param_id?: string;
   task_id?: string;
@@ -606,6 +609,8 @@ export interface FindingQuery {
   query?: string;
   sort?: "severity" | "time";
   timeDirection?: "asc" | "desc"; // Missing = newest first; secondary to severity when sort="severity".
+  from?: string; // ISO timestamp, inclusive
+  to?: string; // ISO timestamp, inclusive
   // 资产树节点 key;选中一个节点 = 选中它的整棵子树。空 = 不按资产筛选。
   assetScope?: string;
 }
@@ -964,6 +969,12 @@ export interface TrafficHost {
 // ---- App settings (runtime toggles) ----
 export interface Settings {
   traffic_capture: boolean;
+  /** 是否向可见 Agent 暴露浏览器 MCP 的截图工具。默认关闭。 */
+  browser_screenshot_enabled?: boolean;
+  /** 是否在报告截图右上角显示截图保存时间。默认关闭。 */
+  browser_screenshot_timestamp_enabled?: boolean;
+  /** 是否向 Agent 注入统一 OPSEC 准则。默认关闭。 */
+  opsec_enabled?: boolean;
   credential_agent_enabled: boolean;
   credential_traffic_binding: boolean;
   task_intelligence_enabled: boolean; // 默认关闭；关闭不注入情报工具或提示
@@ -1330,6 +1341,23 @@ export interface Stats {
   roe_enabled: boolean;
   findings_confirmed: number;
   active_task?: Partial<Task>;
+}
+
+export interface SystemMetricValue {
+  used_bytes: number;
+  total_bytes: number;
+  percent: number;
+}
+
+export interface SystemMetrics {
+  scope: "container" | "unsupported" | string;
+  supported: boolean;
+  timestamp: string;
+  container_metrics: boolean;
+  cpu: SystemMetricValue;
+  memory: SystemMetricValue;
+  disk: SystemMetricValue;
+  data_disk: SystemMetricValue;
 }
 
 // ---- Intercept Rules ----

@@ -22,6 +22,7 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 # Node 从 NodeSource 装 22.x：与前端构建（CI 用 node 22）主版本一致；bookworm 自带 nodejs 是 18，Playwright 要求 >=20。
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates ripgrep curl wget vim git jq unzip \
+      tzdata \
       dnsutils iputils-ping netcat-openbsd inetutils-telnet whois nmap \
       sqlmap whatweb hydra sshpass masscan dirb gobuster ffuf wapiti \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
@@ -74,6 +75,7 @@ RUN pip3 install --no-cache-dir -i "$PIP_INDEX_URL" \
       requests PySocks python-socks paramiko mmh3 pyjwt bcrypt PyNaCl websocket-client \
     && rm -rf /root/.cache/pip
 WORKDIR /app
+ENV TZ=Asia/Shanghai
 # 预编译好的对应架构二进制（dist/amd64/artex 或 dist/arm64/artex）
 COPY dist/${TARGETARCH}/artex /app/artex
 # 守护启动脚本：进程退出后按退出码决定是否重新拉起，页面一键更新靠它完成换装。

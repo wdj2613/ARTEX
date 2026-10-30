@@ -309,6 +309,9 @@ func knowledgeQueryBudgetOf(get func() (value string, ok bool, err error)) int {
 // Settings keys the UI toggles at runtime.
 const (
 	settingTrafficCapture      = "traffic_capture"
+	settingBrowserScreenshot   = "browser_screenshot_enabled"
+	settingScreenshotTimestamp = "browser_screenshot_timestamp_enabled"
+	settingOpsecEnabled        = "opsec_enabled"
 	settingAgentTrafficBinding = "agent_traffic_binding"
 	// settingAgentIntentDedup controls the add_intent near-duplicate gate:
 	// off / warn (default: create + warn) / block (refuse while a duplicate is
@@ -988,8 +991,13 @@ func (m *Manager) syncBrowserMCPProxy() {
 	proxy := m.ProxyAddr()  // "" when capture off
 	cert := m.ProxyCACert() // "" when capture off
 
-	args := stripProxyArgs(decodeStrSlice(srv.Args))
+	args := ensureBrowserMCPArgs(stripProxyArgs(decodeStrSlice(srv.Args)), m.pg.GetBool(settingBrowserScreenshot, false))
 	env := decodeStrMap(srv.Env)
+	if m.pg.GetBool(settingBrowserScreenshot, false) {
+		// A persisted screenshot opt-in must survive restart even if an older
+		// database had the seeded MCP disabled.
+		srv.Enabled = true
+	}
 	delete(env, "NODE_EXTRA_CA_CERTS")
 	if proxy != "" {
 		args = append(args, "--proxy-server", proxy)
@@ -1008,6 +1016,59 @@ func (m *Manager) syncBrowserMCPProxy() {
 	} else {
 		log.Printf("[mcp] browser MCP 已移除捕获代理配置")
 	}
+}
+
+// ensureBrowserMCPArgs keeps the built-in Playwright MCP runnable in the
+// application container. The production image intentionally runs the service
+// as root; Chromium refuses to start in that mode unless --no-sandbox is
+// passed. When report screenshots are enabled, use Playwright's isolated
+// profile mode as well: every MCP stdio client then gets an in-memory browser
+// context, so concurrent report writers cannot contend for the same persistent
+// profile lock. Keep this migration idempotent so an existing database is
+// repaired as soon as the browser MCP is reconciled (including after a restart).
+func ensureBrowserMCPArgs(args []string, screenshotEnabled bool) []string {
+	out := append([]string(nil), args...)
+	has := func(want string) bool {
+		for _, arg := range out {
+			if arg == want || strings.HasPrefix(arg, want+"=") {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("--headless") {
+		out = append(out, "--headless")
+	}
+	if !has("--no-sandbox") {
+		out = append(out, "--no-sandbox")
+	}
+	if screenshotEnabled && !has("--ignore-https-errors") {
+		out = append(out, "--ignore-https-errors")
+	}
+	if screenshotEnabled && !has("--isolated") {
+		// Playwright rejects --isolated together with --user-data-dir. The
+		// screenshot opt-in deliberately favors independent per-run contexts,
+		// so discard a stale/custom persistent profile flag before enabling the
+		// isolated mode. This also prevents an old database row from reintroducing
+		// the shared-profile lock after an upgrade.
+		filtered := make([]string, 0, len(out)+1)
+		for i := 0; i < len(out); i++ {
+			arg := out[i]
+			if arg == "--user-data-dir" {
+				if i+1 < len(out) {
+					i++
+				}
+				continue
+			}
+			if strings.HasPrefix(arg, "--user-data-dir=") {
+				continue
+			}
+			filtered = append(filtered, arg)
+		}
+		out = filtered
+		out = append(out, "--isolated")
+	}
+	return out
 }
 
 // stripProxyArgs removes any --proxy-server/--proxy-bypass flags (both "--flag val"

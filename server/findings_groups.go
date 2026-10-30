@@ -37,6 +37,8 @@ func findingFilterFromQuery(q url.Values) db.FindingFilter {
 		Query:         q.Get("q"),
 		Sort:          q.Get("sort"),
 		TimeDirection: q.Get("time_direction"),
+		From:          strings.TrimSpace(q.Get("from")),
+		To:            strings.TrimSpace(q.Get("to")),
 		AssetScope:    strings.TrimSpace(q.Get("asset_scope")),
 	}
 }

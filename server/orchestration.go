@@ -11,6 +11,7 @@ import (
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
+	"github.com/Autumn-27/artex/intercept"
 	"github.com/Autumn-27/norma/permission"
 	actool "github.com/Autumn-27/norma/tool"
 )
@@ -474,6 +475,16 @@ func (s *Server) toolUpdateFindingReport() actool.CoreTool {
 				if err := s.checkCaseReviewScope(ctx, "update_finding_report", findingCaseRequest{FindingID: json.RawMessage(i64s(fid))}); err != nil {
 					return actool.Errorf(err.Error()), nil
 				}
+				if f, err := s.m.pg.GetFinding(fid); err == nil && f != nil && f.TaskID != nil {
+					if err := s.archiveFindingScreenshots(*f.TaskID, a.Report); err != nil {
+						return actool.Errorf("归档报告截图失败: " + err.Error()), nil
+					}
+				}
+				if conversationID := intercept.ConvIDFromContext(ctx); conversationID > 0 {
+					if err := s.m.pg.SetFindingReportConversationID(fid, conversationID); err != nil {
+						return actool.Errorf("关联报告对话失败: " + err.Error()), nil
+					}
+				}
 			}
 			n, err := s.m.pg.SetFindingReportVersionByNodeID(ctx, nodeID, a.Report, a.EvidenceVersion)
 			if err != nil {
@@ -534,12 +545,75 @@ func (s *Server) seedOrchestrationTools() {
 	s.reseedWorkerPrompt()            // worker 提示词:加否定结论证据门槛(一次性)
 	s.seedReporterAgent()             // 预置「报告撰写」agent + 工具绑定 + finding 触发器(一次性)
 	s.upgradeReporterTriggerMessage() // 老库补迁移:让 reporter 回传 evidence_version(一次性)
-	s.seedFindingTrafficTools()       // 增加可选证据参数及只读证据工具，保留用户配置
+	s.migrateReporterWorkflow()       // 修复旧库残留的 reproduction 工具/提示词绑定
+	if s.m.pg.GetBool(settingBrowserScreenshot, false) {
+		// Re-apply the opt-in after startup seeding so an existing database gets
+		// both reporter visibility and the repaired Playwright launch arguments.
+		if err := s.setReporterBrowserScreenshotVisibility(true); err != nil {
+			log.Printf("[reporter] 截图 MCP 启动配置同步失败: %v", err)
+		}
+	}
+	s.seedFindingTrafficTools() // 增加可选证据参数及只读证据工具，保留用户配置
 	s.seedFindingWorkflowTools()
 	s.seedFindingCaseTools()
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
 	// pentest 一起 seed 好了（项目尚无旧库，不做迁移）。
+}
+
+// migrateReporterWorkflow repairs databases created by the short-lived
+// structured-reproduction reporter. That workflow referenced
+// update_finding_reproduction, which is no longer a runtime tool; leaving the
+// old prompt/trigger in place makes a newly reported vulnerability fail after
+// all evidence has already been collected. User-authored reporter prompts are
+// preserved unless they contain the removed tool contract.
+func (s *Server) migrateReporterWorkflow() {
+	const flag = "reporter_workflow_markdown_v2"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	defer func() { _ = s.m.pg.SetSetting(flag, "true") }()
+
+	reporter, err := s.m.pg.GetAgentByKey("reporter")
+	if err != nil || reporter == nil {
+		return
+	}
+	if current, err := s.m.pg.CurrentPrompt(reporter.ID); err == nil &&
+		(strings.Contains(current, "update_finding_reproduction") || strings.Contains(current, "漏洞步骤编写 agent")) {
+		if _, err := s.m.pg.ResetPromptToDefault(reporter.ID, agent.ReporterDefaultPrompt); err != nil {
+			log.Printf("[reporter] 旧版提示词迁移失败: %v", err)
+		} else {
+			log.Printf("[reporter] 已将旧版复现步骤提示词迁移为 Markdown 报告流程")
+		}
+	}
+
+	// 只补齐当前报告流程需要的绑定，不覆盖管理员已有的其它配置。
+	_ = s.m.pg.AddAgentToToolBinding("reporter", []string{
+		"update_finding_report", "get_finding_traffic", "bind_finding_traffic",
+		"get_task_node_detail", "list_task_findings", "get_task_worker_trace",
+		"list_task_worker_traces", "search_task_worker_traces", "get_task_graph",
+	})
+	// 旧行保留在工具目录里供历史审计，但不能继续被运行时广告或调用。
+	if _, err := s.m.pg.Exec(`UPDATE tools SET enabled=false, updated_at=now() WHERE key='update_finding_reproduction' AND system`); err != nil {
+		log.Printf("[reporter] 旧 reproduction 工具停用失败: %v", err)
+	}
+
+	triggers, err := s.m.pg.ListTriggersFor("reporter")
+	if err != nil {
+		log.Printf("[reporter] 读取触发器失败: %v", err)
+		return
+	}
+	for _, t := range triggers {
+		if !t.OnToolCall || !strings.Contains(t.ToolCallMessage, "update_finding_reproduction") {
+			continue
+		}
+		t.ToolCallMessage = reporterToolCallMessage
+		if err := s.m.pg.UpdateTrigger(t); err != nil {
+			log.Printf("[reporter] 旧触发器迁移失败: %v", err)
+			continue
+		}
+		log.Printf("[reporter] 已将旧 reproduction 触发器迁移为报告保存流程")
+	}
 }
 
 // refreshBuiltinToolSchemas propagates code schema/description changes on the
