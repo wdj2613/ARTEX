@@ -348,7 +348,11 @@ func (s *Server) performFindingCaseTool(ctx context.Context, name string, a find
 				return nil, err
 			}
 		}
-		return map[string]any{"finding": dto, "finding_node_id": f.NodeID}, nil
+		handoff, err := s.m.pg.FindingVerificationHandoff(f)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"finding": dto, "finding_node_id": f.NodeID, "verification_handoff": handoff}, nil
 	case "merge_finding_records":
 		id, err := s.m.pg.MergeFindingCase(ctx, parseProfileID(a.TaskID), a.ids(), a.Title, a.Reason, "reporter")
 		return map[string]string{"case_id": i64s(id)}, err
