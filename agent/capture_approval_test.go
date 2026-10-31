@@ -40,16 +40,22 @@ func TestCaptureApprovalLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Reviewer verdicts are translated by the interceptor before a decision is
+	// recorded, so the expectations below state the *settled* outcome rather than
+	// deriving it from the verdict: an unparseable verdict falls through to the
+	// configured failure policy (default "ask", which then times out to allow),
+	// and a human decision overwrites the source and, for allow, keeps the replay
+	// context that only an automatic allow drops.
 	for _, tc := range []struct {
-		name, action, status, execution string
-		manual, approve, toolError      bool
+		name, action, status, source, initial, effective, execution string
+		manual, approve, toolError, modelFallback                   bool
 	}{
-		{"model_fallback", "invalid", "allowed", "succeeded", false, false, false},
-		{"model_allow", "allow", "allowed", "succeeded", false, false, false},
-		{"model_deny", "deny", "denied", "not_executed", false, false, false},
-		{"human_allow_tool_error", "ask", "allowed", "failed", true, true, true},
-		{"human_deny", "ask", "denied", "not_executed", true, false, false},
-		{"timeout_allow", "ask", "timeout", "succeeded", false, false, false},
+		{"model_fallback", "invalid", "timeout", "model", "ask", "allow", "succeeded", false, false, false, true},
+		{"model_allow", "allow", "allowed", "model", "allow", "allow", "succeeded", false, false, false, false},
+		{"model_deny", "deny", "denied", "model", "deny", "deny", "not_executed", false, false, false, false},
+		{"human_allow_tool_error", "ask", "allowed", "manual", "ask", "allow", "failed", true, true, true, false},
+		{"human_deny", "ask", "denied", "manual", "ask", "deny", "not_executed", true, false, false, false},
+		{"timeout_allow", "ask", "timeout", "model", "ask", "allow", "succeeded", false, false, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ic.SetReviewer(func(context.Context, int64, string, intercept.ReviewInput) (intercept.Decision, error) {
@@ -112,20 +118,16 @@ func TestCaptureApprovalLifecycle(t *testing.T) {
 				t.Fatal(err)
 			}
 			a := detail.Audit
-			initialAction := tc.action
-			if tc.action == "invalid" {
-				initialAction = "allow"
-			}
 			wantUserMessage := "record this review"
-			if initialAction == "allow" {
+			if tc.initial == "allow" {
 				// Routine automatic allows keep decision/execution metadata but
 				// intentionally omit the bulky replay context from the audit row.
 				wantUserMessage = ""
 			}
-			if detail.Status != tc.status || detail.DecisionSource != "model" || a == nil || a.ExecutionStatus != tc.execution || a.ToolUseID != "probe-call" || a.UserMessage != wantUserMessage || a.InitialAction != initialAction || a.ModelFallback != (tc.action == "invalid") || a.ProfileID != 7 {
+			if detail.Status != tc.status || detail.DecisionSource != tc.source || a == nil || a.ExecutionStatus != tc.execution || a.ToolUseID != "probe-call" || a.UserMessage != wantUserMessage || a.InitialAction != tc.initial || a.EffectiveAction != tc.effective || a.ModelFallback != tc.modelFallback || a.ProfileID != 7 {
 				t.Fatalf("unexpected review: row=%+v audit=%+v", detail.InterceptApprovalRow, a)
 			}
-			if initialAction == "allow" && (len(a.Context) != 0 || a.UserTruncated || a.ContextTruncated) {
+			if tc.initial == "allow" && (len(a.Context) != 0 || a.UserTruncated || a.ContextTruncated) {
 				t.Fatalf("routine allow retained replay context: %+v", a)
 			}
 			wantCalls := 1

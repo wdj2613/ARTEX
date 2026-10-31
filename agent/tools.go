@@ -547,9 +547,9 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 	}
 	// coverage：粗略的资产测试覆盖度参考——范围(task_scope)内的资产里，被 fact 碰过的
 	// 占比 + by_type(按类型的 总数/已测)。要看未测的具体资产由 agent 按需调 list_untested_assets 自行判断。仅任务上下文有。
-	// 资产覆盖度功能关闭时(coverageDisabled)：只保留 host_count(目标主机数的感知信息)，
-	// 丢弃 denominator/tested/pct/by_type/note 等覆盖度度量，避免污染上下文、也不诱导
-	// 已隐藏的 add_task_scope/list_untested_assets。
+	// 资产覆盖度功能关闭时(coverageDisabled)：只保留 scope/host_count(范围边界与目标主机数
+	// 的感知信息，company 关联经由 scope 在此浮现)，丢弃 denominator/tested/pct/by_type/note
+	// 等覆盖度度量，避免污染上下文、也不诱导已隐藏的 add_task_scope/list_untested_assets。
 	if t.as != nil && t.ts != nil && t.taskID > 0 {
 		{
 			m := map[string]any{}
@@ -566,6 +566,66 @@ func (t *ToolSet) graphOverviewData() map[string]any {
 						m["pct"] = cov.Pct
 					}
 				}
+			}
+			// scope：当前测试范围的根资产（task_scope 原始行），让 agent 知道这个任务到底
+			// 圈定了哪些目标（不是全部测试资产，而是范围边界本身）。与覆盖度开关无关：
+			// 关闭覆盖度时它仍是授权的目标边界，company 关联也经由它浮现。
+			if rows, err := t.as.ListTaskScopeWithSources(t.taskID); err == nil && len(rows) > 0 {
+				scope := make([]map[string]any, 0, len(rows))
+				for _, r := range rows {
+					e := map[string]any{"kind": r.Kind, "source": r.Source, "task_id": r.TaskID}
+					if r.TaskID != t.taskID {
+						inheritedMap(e, r.TaskID)
+					}
+					switch {
+					case r.Domain != "":
+						e["value"] = r.Domain
+					case r.Net != "":
+						e["value"] = r.Net
+					case r.Value != "":
+						e["value"] = r.Value
+					case r.CompanyID != nil:
+						e["company_id"] = *r.CompanyID
+						if t.cs != nil {
+							if company, err := t.cs.GetCompany(*r.CompanyID); err == nil && company != nil {
+								e["company_name"] = company.Name
+							}
+							if rules, err := t.cs.GetScope(*r.CompanyID); err == nil {
+								keywords := make([]string, 0)
+								companyScope := make([]map[string]any, 0, len(rules))
+								for _, rule := range rules {
+									value := rule.Raw
+									if value == "" {
+										switch rule.Kind {
+										case "domain":
+											value = rule.Domain
+										case "ip", "cidr":
+											value = rule.Net
+										default:
+											value = rule.Value
+										}
+									}
+									entry := map[string]any{"kind": rule.Kind, "value": value}
+									if rule.Reason != "" {
+										entry["reason"] = rule.Reason
+									}
+									companyScope = append(companyScope, entry)
+									if rule.Kind == "keyword" && rule.Raw != "" {
+										keywords = append(keywords, rule.Raw)
+									}
+								}
+								if len(companyScope) > 0 {
+									e["company_scope"] = companyScope
+								}
+								if len(keywords) > 0 {
+									e["company_keywords"] = keywords
+								}
+							}
+						}
+					}
+					scope = append(scope, e)
+				}
+				m["scope"] = scope
 			}
 			if hosts, err := t.as.HostsByTaskWithSources(t.taskID); err == nil {
 				// 只给主机总数，不再把 host 列表平铺进 graph_overview（大范围任务里那是每轮

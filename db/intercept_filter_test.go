@@ -146,6 +146,11 @@ func TestInterceptApprovalFilters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The fixture rows were pinned to 2099 above; new rows are stamped with the
+	// DB clock, so give this one the date the range query below asserts on.
+	if _, err = d.Exec(`UPDATE intercept_pending SET created_at='2099-01-01 12:00:00' WHERE id=$1`, searchID); err != nil {
+		t.Fatal(err)
+	}
 	rows, total, err = d.ListTaskInterceptsPage(scope, 1, 20, InterceptApprovalFilter{Search: "example.test"})
 	if err != nil || total != 1 || len(rows) != 1 || rows[0].ID != searchID {
 		t.Fatalf("snapshot search total=%d rows=%d err=%v", total, len(rows), err)

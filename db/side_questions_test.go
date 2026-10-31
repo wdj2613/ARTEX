@@ -383,7 +383,14 @@ func TestSideTaskArchiveVersions(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if archive.FormatVersion != 3 || archive.DataCounts["side_question_sessions"] != 2 || archive.DataCounts["side_question_requests"] != 2 {
+			// Two independent contracts: the archive we just produced must carry the
+			// current format version, and it must contain both side-question tables.
+			// Keep the assertions apart so a version bump reports a version mismatch
+			// instead of masquerading as missing data.
+			if archive.FormatVersion != TaskArchiveFormatVersion {
+				t.Fatalf("archive format version=%d, want %d", archive.FormatVersion, TaskArchiveFormatVersion)
+			}
+			if archive.DataCounts["side_question_sessions"] != 2 || archive.DataCounts["side_question_requests"] != 2 {
 				t.Fatalf("missing side archive: %+v", archive.DataCounts)
 			}
 			if err = d.CompleteTaskArchive(job.ID, archive, "/tmp/side-fixture.tar.zst", "fixture", 1, 1); err != nil {
