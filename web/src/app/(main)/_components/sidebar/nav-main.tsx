@@ -185,13 +185,31 @@ function InterceptPendingBadge() {
   );
 }
 
+/**
+ * 移动端点击侧边栏导航项后应自动收起抽屉（Shet）。该导航在手机上以
+ * Radix Sheet 渲染，open 状态由 sidebar.tsx 的 openMobile 控制；仅点击
+ * Link 只触发客户端路由、不会通知 Sheet 关闭，导致抽屉残留覆盖页面。
+ * 这里在移动端点击时调 setOpenMobile(false)。桌面端无影响（isMobile 为 false）。
+ */
+function useCloseMobileSidebarOnNavigate() {
+  const { isMobile, setOpenMobile } = useSidebar();
+  return React.useCallback(
+    (e: React.MouseEvent<HTMLAnchorElement>) => {
+      if (isMobile) setOpenMobile(false);
+    },
+    [isMobile, setOpenMobile],
+  );
+}
+
 function NavLinkItem({ item, isActive, showIconFallback }: NavLinkItemProps) {
+  const onNavigate = useCloseMobileSidebarOnNavigate();
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild aria-disabled={item.disabled} tooltip={item.title} isActive={isActive}>
         <Link
           prefetch={false}
           href={item.url}
+          onClick={onNavigate}
           target={item.newTab ? "_blank" : undefined}
           rel={item.newTab ? "noreferrer" : undefined}
         >
@@ -220,6 +238,7 @@ function NavLinkIcon({ item, showFallback }: NavLinkIconProps) {
 
 function NavDropdownItem({ item, isActive, isSubItemActive }: NavDropdownItemProps) {
   const Icon = item.icon;
+  const onNavigate = useCloseMobileSidebarOnNavigate();
 
   return (
     <SidebarMenuItem>
@@ -241,6 +260,7 @@ function NavDropdownItem({ item, isActive, isSubItemActive }: NavDropdownItemPro
                   <Link
                     prefetch={false}
                     href={subItem.url}
+                    onClick={onNavigate}
                     target={subItem.newTab ? "_blank" : undefined}
                     rel={subItem.newTab ? "noreferrer" : undefined}
                     aria-current={isSubItemActive(subItem.url) ? "page" : undefined}
@@ -261,6 +281,7 @@ function NavDropdownItem({ item, isActive, isSubItemActive }: NavDropdownItemPro
 
 function NavCollapsibleItem({ item, isActive, defaultOpen, isSubItemActive }: NavCollapsibleItemProps) {
   const Icon = item.icon;
+  const onNavigate = useCloseMobileSidebarOnNavigate();
 
   return (
     <Collapsible asChild defaultOpen={defaultOpen} className="group/collapsible">
@@ -289,6 +310,7 @@ function NavCollapsibleItem({ item, isActive, defaultOpen, isSubItemActive }: Na
                     <Link
                       prefetch={false}
                       href={subItem.url}
+                      onClick={onNavigate}
                       target={subItem.newTab ? "_blank" : undefined}
                       rel={subItem.newTab ? "noreferrer" : undefined}
                     >
